@@ -1,23 +1,12 @@
 const express = require('express');
-const https = require('https');
-const fs = require('fs');
-const path = require('path');
+const http = require('http');
 const cors = require('cors');
 const { Server } = require('socket.io');
 
 const app = express();
 app.use(cors());
 
-const httpsOptions = {
-  key: fs.readFileSync(
-    path.resolve(__dirname, '../client/cert/localhost+3-key.pem')
-  ),
-  cert: fs.readFileSync(
-    path.resolve(__dirname, '../client/cert/localhost+3.pem')
-  ),
-};
-
-const server = https.createServer(httpsOptions, app);
+const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
@@ -135,11 +124,11 @@ io.on('connection', (socket) => {
 });
 
 app.get('/', (_, res) => {
-  res.send('Secure signaling server is running');
+  res.send('Backend is running');
 });
 
 const PORT = process.env.PORT || 3001;
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server started on port ${PORT}`);
 });
