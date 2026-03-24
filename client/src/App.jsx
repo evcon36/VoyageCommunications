@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import './App.css';
 
-const socket = io('https://172.20.10.10:3001', {
+const socket = io(import.meta.env.VITE_SERVER_URL, {
   transports: ['websocket', 'polling'],
 });
 

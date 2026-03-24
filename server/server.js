@@ -138,6 +138,8 @@ app.get('/', (_, res) => {
   res.send('Secure signaling server is running');
 });
 
-server.listen(3001, '0.0.0.0', () => {
-  console.log('HTTPS signaling server started on https://0.0.0.0:3001');
+const PORT = process.env.PORT || 3001;
+
+server.listen(PORT, () => {
+  console.log(`Server started on port ${PORT}`);
 });
