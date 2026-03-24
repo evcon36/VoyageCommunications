@@ -47,23 +47,29 @@ io.on('connection', (socket) => {
     const updatedUsers = roomUsers.get(roomId) || [];
 
     if (updatedUsers.length === 1) {
-      socket.emit('room-created', {
-        yourName: socket.data.userName,
-      });
+	socket.emit('room-created', {
+		yourName: socket.data.userName,
+  	});
     } else if (updatedUsers.length === 2) {
-      const otherUser = updatedUsers.find((user) => user.socketId !== socket.id);
+  	const [firstUser, secondUser] = updatedUsers;
 
-      socket.emit('room-joined', {
-        yourName: socket.data.userName,
-        remoteUserName: otherUser?.userName || 'Собеседник',
-      });
+  	io.to(secondUser.socketId).emit('room-joined', {
+    		yourName: secondUser.userName,
+    		remoteUserName: firstUser.userName || 'Собеседник',
+  	});
 
-      socket.to(roomId).emit('participant-joined', {
-        remoteUserName: socket.data.userName,
-      });
+  	io.to(firstUser.socketId).emit('participant-joined', {
+    		remoteUserName: secondUser.userName,
+  	});
 
-      socket.to(roomId).emit('ready');
-    }
+  	io.to(firstUser.socketId).emit('init', {
+    		isInitiator: true,
+  	});
+
+  	io.to(secondUser.socketId).emit('init', {
+    		isInitiator: false,
+  	});
+     }
   });
 
   socket.on('offer', ({ roomId, offer }) => {

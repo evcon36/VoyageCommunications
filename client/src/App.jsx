@@ -68,9 +68,13 @@ export default function App() {
       setStatus(`${remoteUserName || 'Собеседник'} подключился`);
     });
 
-    socket.on('ready', async () => {
-      setStatus('Второй участник подключился. Создаём соединение...');
-      await createOffer();
+    socket.on('init', async ({ isInitiator }) => {
+  	if (isInitiator) {
+  	  setStatus('Вы инициатор, создаём offer...');
+ 	  await createOffer();
+  	} else {
+          setStatus('Ожидаем offer...');
+  	}
     });
 
     socket.on('offer', async (offer) => {
