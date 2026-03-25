@@ -14,11 +14,48 @@ socket.on('connect_error', (error) => {
   console.error('Socket connect error:', error);
 });
 
+const iceServers = [
+  {
+    urls: 'stun:stun.relay.metered.ca:80',
+  },
+];
+
+if (
+  import.meta.env.VITE_TURN_USERNAME &&
+  import.meta.env.VITE_TURN_CREDENTIAL
+) {
+  iceServers.push(
+    {
+      urls: 'turn:global.relay.metered.ca:80',
+      username: import.meta.env.VITE_TURN_USERNAME,
+      credential: import.meta.env.VITE_TURN_CREDENTIAL,
+    },
+    {
+      urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+      username: import.meta.env.VITE_TURN_USERNAME,
+      credential: import.meta.env.VITE_TURN_CREDENTIAL,
+    },
+    {
+      urls: 'turn:global.relay.metered.ca:443',
+      username: import.meta.env.VITE_TURN_USERNAME,
+      credential: import.meta.env.VITE_TURN_CREDENTIAL,
+    },
+    {
+      urls: 'turns:global.relay.metered.ca:443?transport=tcp',
+      username: import.meta.env.VITE_TURN_USERNAME,
+      credential: import.meta.env.VITE_TURN_CREDENTIAL,
+    }
+  );
+}
+
+console.log('TURN USERNAME:', import.meta.env.VITE_TURN_USERNAME);
+console.log(
+  'TURN CREDENTIAL EXISTS:',
+  Boolean(import.meta.env.VITE_TURN_CREDENTIAL)
+);
+
 const rtcConfig = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-  ],
+  iceServers,
 };
 
 export default function App() {
@@ -47,6 +84,9 @@ export default function App() {
   const peerRef = useRef(null);
   const cameraStreamRef = useRef(null);
   const screenStreamRef = useRef(null);
+
+  const pendingIceCandidatesRef = useRef([]);
+  const remoteDescriptionSetRef = useRef(false);
 
   useEffect(() => {
     roomIdRef.current = roomId;
@@ -78,22 +118,52 @@ export default function App() {
     });
 
     socket.on('offer', async (offer) => {
-      setStatus('Получен запрос на соединение');
-      await handleOffer(offer);
+      try {
+        console.log('Получен offer');
+        setStatus('Получен запрос на соединение');
+        await handleOffer(offer);
+      } catch (error) {
+        console.error('Ошибка обработки offer:', error);
+        setStatus('Ошибка при обработке offer');
+      }
     });
 
     socket.on('answer', async (answer) => {
-      setStatus('Соединение подтверждено');
-      if (peerRef.current) {
-        await peerRef.current.setRemoteDescription(answer);
+      try {
+        console.log('Получен answer');
+        setStatus('Соединение подтверждено');
+
+        if (peerRef.current) {
+          await peerRef.current.setRemoteDescription(answer);
+          remoteDescriptionSetRef.current = true;
+          await flushPendingIceCandidates();
+        }
+      } catch (error) {
+        console.error('Ошибка обработки answer:', error);
+        setStatus('Ошибка при обработке answer');
       }
     });
 
     socket.on('ice-candidate', async (candidate) => {
       try {
-        if (peerRef.current && candidate) {
-          await peerRef.current.addIceCandidate(candidate);
+        if (!candidate) return;
+
+        console.log('Получен ICE candidate:', candidate.type);
+
+        if (!peerRef.current) {
+          console.log('Peer ещё не создан, кладём ICE candidate в очередь');
+          pendingIceCandidatesRef.current.push(candidate);
+          return;
         }
+
+        if (!remoteDescriptionSetRef.current) {
+          console.log('Remote description ещё не установлено, кладём ICE candidate в очередь');
+          pendingIceCandidatesRef.current.push(candidate);
+          return;
+        }
+
+        await peerRef.current.addIceCandidate(candidate);
+        console.log('ICE candidate успешно добавлен');
       } catch (error) {
         console.error('Ошибка ICE candidate:', error);
       }
@@ -125,7 +195,7 @@ export default function App() {
       socket.off('room-created');
       socket.off('room-joined');
       socket.off('participant-joined');
-      socket.off('ready');
+      socket.off('init');
       socket.off('offer');
       socket.off('answer');
       socket.off('ice-candidate');
@@ -212,30 +282,33 @@ export default function App() {
       updateLocalPreview();
       return stream;
     } catch (error) {
-      console.error(error);
-      setStatus('Не удалось получить доступ к камере или микрофону');
-      throw error;
+      console.error('getUserMedia error:', error);
+      setStatus('Камера/микрофон недоступны');
+      return null;
     }
   };
 
   const createPeerConnection = async () => {
     if (peerRef.current) return peerRef.current;
 
-    await startCameraMedia();
-
     const peer = new RTCPeerConnection(rtcConfig);
 
     peer.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log('Отправляем ICE candidate:', event.candidate.type);
+
         socket.emit('ice-candidate', {
           roomId: roomIdRef.current,
           candidate: event.candidate,
         });
+      } else {
+        console.log('ICE gathering completed');
       }
     };
 
     peer.ontrack = (event) => {
       const [remoteStream] = event.streams;
+      console.log('Получен remote track');
 
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = remoteStream;
@@ -246,12 +319,11 @@ export default function App() {
 
     peer.onconnectionstatechange = () => {
       const state = peer.connectionState;
+      console.log('connectionState:', state);
 
       if (state === 'connected') {
         setStatus('Соединение установлено');
-        if (!callStartedAt) {
-          setCallStartedAt(Date.now());
-        }
+        setCallStartedAt((prev) => prev || Date.now());
       } else if (state === 'connecting') {
         setStatus('Подключение...');
       } else if (state === 'disconnected') {
@@ -263,26 +335,63 @@ export default function App() {
       }
     };
 
-    const audioTracks = cameraStreamRef.current.getAudioTracks();
-    const videoTrack = getCurrentVideoTrack();
+    peer.oniceconnectionstatechange = () => {
+      console.log('iceConnectionState:', peer.iceConnectionState);
+    };
 
-    audioTracks.forEach((track) => {
-      peer.addTrack(track, cameraStreamRef.current);
-    });
+    peer.onicegatheringstatechange = () => {
+      console.log('iceGatheringState:', peer.iceGatheringState);
+    };
 
-    if (videoTrack) {
-      const videoSourceStream = screenStreamRef.current || cameraStreamRef.current;
-      peer.addTrack(videoTrack, videoSourceStream);
+    peer.onsignalingstatechange = () => {
+      console.log('signalingState:', peer.signalingState);
+    };
+
+    const stream = await startCameraMedia();
+
+    if (stream) {
+      stream.getAudioTracks().forEach((track) => {
+        peer.addTrack(track, stream);
+      });
+
+      const videoTrack =
+        screenStreamRef.current?.getVideoTracks()[0] ||
+        stream.getVideoTracks()[0];
+
+      if (videoTrack) {
+        const videoSourceStream = screenStreamRef.current || stream;
+        peer.addTrack(videoTrack, videoSourceStream);
+      }
+    } else {
+      console.warn('Peer создан без локального media stream');
     }
 
     peerRef.current = peer;
     return peer;
   };
 
+  const flushPendingIceCandidates = async () => {
+    if (!peerRef.current || !remoteDescriptionSetRef.current) return;
+
+    while (pendingIceCandidatesRef.current.length > 0) {
+      const candidate = pendingIceCandidatesRef.current.shift();
+
+      try {
+        await peerRef.current.addIceCandidate(candidate);
+        console.log('Отложенный ICE candidate успешно добавлен');
+      } catch (error) {
+        console.error('Ошибка при добавлении отложенного ICE candidate:', error);
+      }
+    }
+  };
+
   const createOffer = async () => {
     const peer = await createPeerConnection();
+
     const offer = await peer.createOffer();
     await peer.setLocalDescription(offer);
+
+    console.log('Создан и отправлен offer');
 
     socket.emit('offer', {
       roomId: roomIdRef.current,
@@ -292,7 +401,10 @@ export default function App() {
 
   const handleOffer = async (offer) => {
     const peer = await createPeerConnection();
+
     await peer.setRemoteDescription(offer);
+    remoteDescriptionSetRef.current = true;
+    await flushPendingIceCandidates();
 
     const answer = await peer.createAnswer();
     await peer.setLocalDescription(answer);
@@ -316,8 +428,6 @@ export default function App() {
 
     if (joined) return;
 
-    await startCameraMedia();
-
     socket.emit('join-room', {
       roomId: roomId.trim(),
       userName: userName.trim(),
@@ -325,6 +435,13 @@ export default function App() {
 
     setJoined(true);
     setStatus('Подключаемся к комнате...');
+
+    try {
+      await startCameraMedia();
+    } catch (error) {
+      console.error('Ошибка запуска камеры/микрофона после входа в комнату:', error);
+      setStatus('Вы вошли в комнату, но камера/микрофон недоступны');
+    }
   };
 
   const replaceOutgoingVideoTrack = async (newTrack) => {
@@ -458,9 +575,15 @@ export default function App() {
       peerRef.current.ontrack = null;
       peerRef.current.onicecandidate = null;
       peerRef.current.onconnectionstatechange = null;
+      peerRef.current.oniceconnectionstatechange = null;
+      peerRef.current.onicegatheringstatechange = null;
+      peerRef.current.onsignalingstatechange = null;
       peerRef.current.close();
       peerRef.current = null;
     }
+
+    pendingIceCandidatesRef.current = [];
+    remoteDescriptionSetRef.current = false;
   };
 
   const stopAllMedia = () => {
