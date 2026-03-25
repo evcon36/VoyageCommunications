@@ -17,10 +17,31 @@ const io = new Server(server, {
 
 const roomUsers = new Map();
 
+function removeUserFromRoom(roomId, socketId) {
+  if (!roomId) return;
+
+  const users = roomUsers.get(roomId) || [];
+  const filteredUsers = users.filter((user) => user.socketId !== socketId);
+
+  if (filteredUsers.length > 0) {
+    roomUsers.set(roomId, filteredUsers);
+  } else {
+    roomUsers.delete(roomId);
+  }
+}
+
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
   socket.on('join-room', ({ roomId, userName }) => {
+    if (!roomId) return;
+
+    // На всякий случай очищаем старое состояние этого сокета
+    if (socket.data.roomId) {
+      removeUserFromRoom(socket.data.roomId, socket.id);
+      socket.leave(socket.data.roomId);
+    }
+
     const room = io.sockets.adapter.rooms.get(roomId);
     const roomSize = room ? room.size : 0;
 
@@ -36,40 +57,53 @@ io.on('connection', (socket) => {
       roomUsers.set(roomId, []);
     }
 
-    const users = roomUsers.get(roomId);
+    // Удаляем возможный дубль этого же socket.id перед push
+    removeUserFromRoom(roomId, socket.id);
+
+    const users = roomUsers.get(roomId) || [];
     users.push({
       socketId: socket.id,
       userName: socket.data.userName,
     });
+    roomUsers.set(roomId, users);
 
     socket.join(roomId);
 
     const updatedUsers = roomUsers.get(roomId) || [];
 
+    console.log('join-room:', {
+      roomId,
+      roomSizeAfterJoin: io.sockets.adapter.rooms.get(roomId)?.size || 0,
+      roomUsersLength: updatedUsers.length,
+      users: updatedUsers,
+    });
+
     if (updatedUsers.length === 1) {
-	socket.emit('room-created', {
-		yourName: socket.data.userName,
-  	});
+      socket.emit('room-created', {
+        yourName: socket.data.userName,
+      });
     } else if (updatedUsers.length === 2) {
-  	const [firstUser, secondUser] = updatedUsers;
+      const [firstUser, secondUser] = updatedUsers;
 
-  	io.to(secondUser.socketId).emit('room-joined', {
-    		yourName: secondUser.userName,
-    		remoteUserName: firstUser.userName || 'Собеседник',
-  	});
+      io.to(secondUser.socketId).emit('room-joined', {
+        yourName: secondUser.userName,
+        remoteUserName: firstUser.userName || 'Собеседник',
+      });
 
-  	io.to(firstUser.socketId).emit('participant-joined', {
-    		remoteUserName: secondUser.userName,
-  	});
+      io.to(firstUser.socketId).emit('participant-joined', {
+        remoteUserName: secondUser.userName,
+      });
 
-  	io.to(firstUser.socketId).emit('init', {
-    		isInitiator: true,
-  	});
+      io.to(firstUser.socketId).emit('init', {
+        isInitiator: true,
+      });
 
-  	io.to(secondUser.socketId).emit('init', {
-    		isInitiator: false,
-  	});
-     }
+      io.to(secondUser.socketId).emit('init', {
+        isInitiator: false,
+      });
+    } else {
+      console.warn('Unexpected roomUsers length:', roomId, updatedUsers.length, updatedUsers);
+    }
   });
 
   socket.on('offer', ({ roomId, offer }) => {
@@ -93,39 +127,43 @@ io.on('connection', (socket) => {
   });
 
   socket.on('leave-room', (roomId) => {
-    socket.leave(roomId);
+    const actualRoomId = roomId || socket.data.roomId;
 
-    const users = roomUsers.get(roomId) || [];
-    const filteredUsers = users.filter((user) => user.socketId !== socket.id);
+    removeUserFromRoom(actualRoomId, socket.id);
+    socket.leave(actualRoomId);
 
-    if (filteredUsers.length > 0) {
-      roomUsers.set(roomId, filteredUsers);
-    } else {
-      roomUsers.delete(roomId);
-    }
+    socket.to(actualRoomId).emit('user-disconnected');
 
-    socket.to(roomId).emit('user-disconnected');
+    socket.data.roomId = null;
+    socket.data.userName = null;
+
+    console.log('leave-room:', {
+      socketId: socket.id,
+      roomId: actualRoomId,
+      roomUsers: roomUsers.get(actualRoomId) || [],
+      roomSizeAfterLeave: io.sockets.adapter.rooms.get(actualRoomId)?.size || 0,
+    });
   });
 
   socket.on('disconnecting', () => {
     const roomId = socket.data.roomId;
 
     if (roomId) {
-      const users = roomUsers.get(roomId) || [];
-      const filteredUsers = users.filter((user) => user.socketId !== socket.id);
-
-      if (filteredUsers.length > 0) {
-        roomUsers.set(roomId, filteredUsers);
-      } else {
-        roomUsers.delete(roomId);
-      }
-
+      removeUserFromRoom(roomId, socket.id);
       socket.to(roomId).emit('user-disconnected');
+
+      console.log('disconnecting:', {
+        socketId: socket.id,
+        roomId,
+        roomUsers: roomUsers.get(roomId) || [],
+      });
     }
   });
 
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
+    socket.data.roomId = null;
+    socket.data.userName = null;
   });
 });
 
