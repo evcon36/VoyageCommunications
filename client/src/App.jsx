@@ -75,6 +75,8 @@ export default function App() {
   const [callSeconds, setCallSeconds] = useState(0);
   const [callStartedAt, setCallStartedAt] = useState(null);
 
+  const [participants, setParticipants] = useState([]);
+
   const roomIdRef = useRef(roomId);
   const chatBodyRef = useRef(null);
 
@@ -106,6 +108,10 @@ export default function App() {
     socket.on('participant-joined', ({ remoteUserName }) => {
       setRemoteUserName(remoteUserName || 'Собеседник');
       setStatus(`${remoteUserName || 'Собеседник'} подключился`);
+    });
+
+    socket.on('room-users', (users) => {
+      setParticipants(Array.isArray(users) ? users : []);
     });
 
     socket.on('init', async ({ isInitiator }) => {
@@ -176,6 +182,7 @@ export default function App() {
     socket.on('room-full', () => {
       setJoined(false);
       setStatus('Комната уже занята');
+      setParticipants([]);
     });
 
     socket.on('user-disconnected', () => {
@@ -183,6 +190,7 @@ export default function App() {
       setRemoteUserName('Собеседник');
       setCallStartedAt(null);
       setCallSeconds(0);
+      setParticipants((prev) => prev.slice(0, 1));
 
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = null;
@@ -195,6 +203,7 @@ export default function App() {
       socket.off('room-created');
       socket.off('room-joined');
       socket.off('participant-joined');
+      socket.off('room-users');
       socket.off('init');
       socket.off('offer');
       socket.off('answer');
@@ -625,6 +634,7 @@ export default function App() {
     setCallStartedAt(null);
     setCallSeconds(0);
     setMessages([]);
+    setParticipants([]);
   };
 
   return (
@@ -649,6 +659,30 @@ export default function App() {
             onChange={(e) => setUserName(e.target.value)}
             placeholder="Введите имя"
           />
+        </div>
+
+        <div className="participants-card">
+          <div className="participants-header">
+            <span>Участники комнаты</span>
+            <span>{participants.length}/2</span>
+          </div>
+
+          <div className="participants-list">
+            {participants.length === 0 ? (
+              <div className="participants-empty">Пока никого нет</div>
+            ) : (
+              participants.map((participant) => (
+                <div className="participant-item" key={participant.socketId}>
+                  <span className="participant-name">
+                    {participant.userName || 'Участник'}
+                  </span>
+                  <span className="participant-badge">
+                    {(participant.userName || '').trim() === userName.trim() ? 'Вы' : 'В комнате'}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
         </div>
 
         <div className="field-group">

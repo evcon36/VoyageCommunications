@@ -17,6 +17,17 @@ const io = new Server(server, {
 
 const roomUsers = new Map();
 
+function emitRoomUsers(roomId) {
+  if (!roomId) return;
+
+  const users = roomUsers.get(roomId) || [];
+
+  io.to(roomId).emit('room-users', users.map((user) => ({
+    socketId: user.socketId,
+    userName: user.userName,
+  })));
+}
+
 function removeUserFromRoom(roomId, socketId) {
   if (!roomId) return;
 
@@ -70,6 +81,7 @@ io.on('connection', (socket) => {
     socket.join(roomId);
 
     const updatedUsers = roomUsers.get(roomId) || [];
+    emitRoomUsers(roomId);
 
     console.log('join-room:', {
       roomId,
@@ -133,6 +145,7 @@ io.on('connection', (socket) => {
     socket.leave(actualRoomId);
 
     socket.to(actualRoomId).emit('user-disconnected');
+    emitRoomUsers(actualRoomId);
 
     socket.data.roomId = null;
     socket.data.userName = null;
@@ -151,6 +164,7 @@ io.on('connection', (socket) => {
     if (roomId) {
       removeUserFromRoom(roomId, socket.id);
       socket.to(roomId).emit('user-disconnected');
+      emitRoomUsers(roomId);
 
       console.log('disconnecting:', {
         socketId: socket.id,
