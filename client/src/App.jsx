@@ -870,7 +870,7 @@ export default function App() {
   const localStatusText = getMediaStatusText({
     cameraOff: isCameraOff,
     micOff: isMuted,
-    cameraMissing: !hasLocalVideoTrack,
+    cameraMissing: false,
   });
 
   const remoteStatusText = getMediaStatusText({
@@ -977,7 +977,7 @@ export default function App() {
                 <span className="self-tag">Вы</span>
               </div>
 
-              {!isCameraOff && hasLocalVideoTrack && (
+              {!isCameraOff && (
                 <video ref={localVideoRef} autoPlay playsInline muted />
               )}
 
