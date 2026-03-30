@@ -269,14 +269,91 @@ export default function App() {
     }
   };
 
-  const startCameraMedia = async () => {
-    if (cameraStreamRef.current) return cameraStreamRef.current;
+  const getMediaErrorMessage = (error) => {
+    const name = error?.name || 'UnknownError';
+
+    switch (name) {
+      case 'NotAllowedError':
+      case 'PermissionDeniedError':
+        return 'Доступ к камере/микрофону запрещён в браузере';
+      case 'NotFoundError':
+      case 'DevicesNotFoundError':
+        return 'Камера или микрофон не найдены на устройстве';
+      case 'NotReadableError':
+      case 'TrackStartError':
+        return 'Камера или микрофон заняты другим приложением';
+      case 'OverconstrainedError':
+      case 'ConstraintNotSatisfiedError':
+        return 'Текущие параметры камеры не поддерживаются устройством';
+      case 'AbortError':
+        return 'Браузер прервал доступ к камере/микрофону';
+      case 'SecurityError':
+        return 'Браузер заблокировал доступ по соображениям безопасности';
+      default:
+        return `Не удалось получить доступ к камере/микрофону (${name})`;
+    }
+  };
+
+  const attachStreamToVideo = async (videoElement, stream, muted = false) => {
+    if (!videoElement) return;
+
+    videoElement.srcObject = stream;
+    videoElement.autoplay = true;
+    videoElement.playsInline = true;
+    videoElement.muted = muted;
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
+      await videoElement.play();
+    } catch (playError) {
+      console.warn('video.play() не выполнился сразу:', playError);
+    }
+  };
+
+  const startCameraMedia = async () => {
+    if (cameraStreamRef.current) {
+      return cameraStreamRef.current;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus('Этот браузер не поддерживает доступ к камере через MediaDevices API');
+      return null;
+    }
+
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+    const preferredConstraints = {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: {
+        facingMode: isMobile ? { ideal: 'user' } : 'user',
+        width: { ideal: 1280, max: 1280 },
+        height: { ideal: 720, max: 720 },
+        frameRate: { ideal: 24, max: 30 },
+      },
+    };
+
+    const relaxedConstraints = {
+      audio: true,
+      video: true,
+    };
+
+    const audioOnlyConstraints = {
+      audio: true,
+      video: false,
+    };
+
+    try {
+      let stream;
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(preferredConstraints);
+      } catch (firstError) {
+        console.warn('preferredConstraints не сработали, пробуем relaxedConstraints', firstError);
+        stream = await navigator.mediaDevices.getUserMedia(relaxedConstraints);
+      }
 
       cameraStreamRef.current = stream;
 
@@ -288,12 +365,38 @@ export default function App() {
         track.enabled = !isCameraOff;
       });
 
-      updateLocalPreview();
+      if (localVideoRef.current) {
+        await attachStreamToVideo(localVideoRef.current, stream, true);
+      } else {
+        updateLocalPreview();
+      }
+
+      setStatus('Камера и микрофон подключены');
       return stream;
     } catch (error) {
       console.error('getUserMedia error:', error);
-      setStatus('Камера/микрофон недоступны');
-      return null;
+
+      // Последний фолбэк: хотя бы микрофон
+      try {
+        const audioOnlyStream = await navigator.mediaDevices.getUserMedia(audioOnlyConstraints);
+
+        cameraStreamRef.current = audioOnlyStream;
+
+        audioOnlyStream.getAudioTracks().forEach((track) => {
+          track.enabled = !isMuted;
+        });
+
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = null;
+        }
+
+        setStatus('Камера недоступна, но микрофон подключён');
+        return audioOnlyStream;
+      } catch (audioOnlyError) {
+        console.error('audioOnly fallback error:', audioOnlyError);
+        setStatus(getMediaErrorMessage(error));
+        return null;
+      }
     }
   };
 
@@ -437,6 +540,16 @@ export default function App() {
 
     if (joined) return;
 
+    setStatus('Проверяем доступ к камере и микрофону...');
+
+    await logPermissionState();
+    const mediaStream = await startCameraMedia();
+
+    if (!mediaStream) {
+      setStatus('Сначала разрешите доступ к камере/микрофону, затем войдите в комнату');
+      return;
+    }
+
     socket.emit('join-room', {
       roomId: roomId.trim(),
       userName: userName.trim(),
@@ -444,13 +557,6 @@ export default function App() {
 
     setJoined(true);
     setStatus('Подключаемся к комнате...');
-
-    try {
-      await startCameraMedia();
-    } catch (error) {
-      console.error('Ошибка запуска камеры/микрофона после входа в комнату:', error);
-      setStatus('Вы вошли в комнату, но камера/микрофон недоступны');
-    }
   };
 
   const replaceOutgoingVideoTrack = async (newTrack) => {
@@ -462,6 +568,24 @@ export default function App() {
 
     if (sender) {
       await sender.replaceTrack(newTrack);
+    }
+  };
+
+  const logPermissionState = async () => {
+    if (!navigator.permissions?.query) return;
+
+    try {
+      const cameraPermission = await navigator.permissions.query({ name: 'camera' });
+      console.log('camera permission:', cameraPermission.state);
+    } catch (e) {
+      console.warn('Не удалось проверить camera permission', e);
+    }
+
+    try {
+      const micPermission = await navigator.permissions.query({ name: 'microphone' });
+      console.log('microphone permission:', micPermission.state);
+    } catch (e) {
+      console.warn('Не удалось проверить microphone permission', e);
     }
   };
 
