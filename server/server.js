@@ -138,6 +138,10 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('media-state', ({ roomId, mediaState }) => {
+    socket.to(roomId).emit('media-state', mediaState);
+  });
+
   socket.on('leave-room', (roomId) => {
     const actualRoomId = roomId || socket.data.roomId;
 

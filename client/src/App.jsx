@@ -77,6 +77,14 @@ export default function App() {
 
   const [participants, setParticipants] = useState([]);
 
+  const [localVideoShape, setLocalVideoShape] = useState('landscape');
+  const [remoteVideoShape, setRemoteVideoShape] = useState('landscape');
+
+  const [remoteMediaState, setRemoteMediaState] = useState({
+    cameraOff: false,
+    micOff: false,
+  });
+
   const roomIdRef = useRef(roomId);
   const chatBodyRef = useRef(null);
 
@@ -115,12 +123,12 @@ export default function App() {
     });
 
     socket.on('init', async ({ isInitiator }) => {
-  	if (isInitiator) {
-  	  setStatus('Вы инициатор, создаём offer...');
- 	  await createOffer();
-  	} else {
-          setStatus('Ожидаем offer...');
-  	}
+      if (isInitiator) {
+        setStatus('Вы инициатор, создаём offer...');
+      await createOffer();
+      } else {
+            setStatus('Ожидаем offer...');
+      }
     });
 
     socket.on('offer', async (offer) => {
@@ -148,6 +156,13 @@ export default function App() {
         console.error('Ошибка обработки answer:', error);
         setStatus('Ошибка при обработке answer');
       }
+    });
+
+    socket.on('media-state', (mediaState) => {
+      setRemoteMediaState({
+        cameraOff: Boolean(mediaState?.cameraOff),
+        micOff: Boolean(mediaState?.micOff),
+      });
     });
 
     socket.on('ice-candidate', async (candidate) => {
@@ -192,6 +207,11 @@ export default function App() {
       setCallSeconds(0);
       setParticipants((prev) => prev.slice(0, 1));
 
+      setRemoteMediaState({
+        cameraOff: false,
+        micOff: false,
+      });
+
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = null;
       }
@@ -211,6 +231,7 @@ export default function App() {
       socket.off('chat-message');
       socket.off('room-full');
       socket.off('user-disconnected');
+      socket.off('media-state');
 
       stopAllMedia();
       closePeerConnection();
@@ -233,6 +254,46 @@ export default function App() {
     chatBodyRef.current.scrollTop = chatBodyRef.current.scrollHeight;
   }, [messages]);
 
+  useEffect(() => {
+    const localVideo = localVideoRef.current;
+    const remoteVideo = remoteVideoRef.current;
+
+    const updateLocalShape = () => {
+      setLocalVideoShape(detectVideoShape(localVideo));
+    };
+
+    const updateRemoteShape = () => {
+      setRemoteVideoShape(detectVideoShape(remoteVideo));
+    };
+
+    if (localVideo) {
+      localVideo.addEventListener('loadedmetadata', updateLocalShape);
+      localVideo.addEventListener('resize', updateLocalShape);
+    }
+
+    if (remoteVideo) {
+      remoteVideo.addEventListener('loadedmetadata', updateRemoteShape);
+      remoteVideo.addEventListener('resize', updateRemoteShape);
+    }
+
+    return () => {
+      if (localVideo) {
+        localVideo.removeEventListener('loadedmetadata', updateLocalShape);
+        localVideo.removeEventListener('resize', updateLocalShape);
+      }
+
+      if (remoteVideo) {
+        remoteVideo.removeEventListener('loadedmetadata', updateRemoteShape);
+        remoteVideo.removeEventListener('resize', updateRemoteShape);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!joined) return;
+    emitMediaState();
+  }, [joined, isMuted, isCameraOff]);
+
   const formattedCallTime = useMemo(() => {
     const hours = Math.floor(callSeconds / 3600);
     const minutes = Math.floor((callSeconds % 3600) / 60);
@@ -244,6 +305,41 @@ export default function App() {
 
     return `${hh}:${mm}:${ss}`;
   }, [callSeconds]);
+
+  const detectVideoShape = (videoElement) => {
+    if (!videoElement) return 'landscape';
+
+    const { videoWidth, videoHeight } = videoElement;
+
+    if (!videoWidth || !videoHeight) {
+      return 'landscape';
+    }
+
+    return videoHeight > videoWidth ? 'portrait' : 'landscape';
+  };
+
+  const getMediaStatusText = ({ cameraOff, micOff, cameraMissing = false }) => {
+    if (cameraMissing && micOff) return 'Камера недоступна, микрофон выключен';
+    if (cameraMissing) return 'Камера недоступна';
+
+    if (cameraOff && micOff) return 'Пользователь отключил камеру и микрофон';
+    if (cameraOff) return 'Пользователь отключил камеру';
+    if (micOff) return 'Пользователь отключил микрофон';
+
+    return '';
+  };
+
+  const emitMediaState = (overrides = {}) => {
+    if (!joined || !roomIdRef.current) return;
+
+    socket.emit('media-state', {
+      roomId: roomIdRef.current,
+      mediaState: {
+        cameraOff: overrides.cameraOff ?? isCameraOff,
+        micOff: overrides.micOff ?? isMuted,
+      },
+    });
+  };
 
   const getCurrentVideoTrack = () => {
     if (screenStreamRef.current) {
@@ -599,17 +695,20 @@ export default function App() {
     });
 
     setIsMuted(nextMuted);
+    emitMediaState({ micOff: nextMuted });
     setStatus(nextMuted ? 'Микрофон выключен' : 'Микрофон включён');
   };
 
   const toggleCamera = () => {
     const currentVideoTrack = getCurrentVideoTrack();
-    if (!currentVideoTrack) return;
-
     const nextCameraOff = !isCameraOff;
-    currentVideoTrack.enabled = !nextCameraOff;
+
+    if (currentVideoTrack) {
+      currentVideoTrack.enabled = !nextCameraOff;
+    }
 
     setIsCameraOff(nextCameraOff);
+    emitMediaState({ cameraOff: nextCameraOff });
     setStatus(nextCameraOff ? 'Видео выключено' : 'Видео включено');
   };
 
@@ -759,7 +858,29 @@ export default function App() {
     setCallSeconds(0);
     setMessages([]);
     setParticipants([]);
+    setRemoteMediaState({
+      cameraOff: false,
+      micOff: false,
+    });
   };
+
+  const localVideoTrack = getCurrentVideoTrack();
+  const hasLocalVideoTrack = Boolean(localVideoTrack);
+
+  const localStatusText = getMediaStatusText({
+    cameraOff: isCameraOff,
+    micOff: isMuted,
+    cameraMissing: !hasLocalVideoTrack,
+  });
+
+  const remoteStatusText = getMediaStatusText({
+    cameraOff: remoteMediaState.cameraOff,
+    micOff: remoteMediaState.micOff,
+  });
+
+  const videoLayoutClass = `video-layout layout-${remoteVideoShape}-${localVideoShape}`;
+  const remotePanelClass = `video-panel video-card remote-panel ${remoteVideoShape} ${remoteStatusText ? 'camera-off' : ''}`;
+  const localPanelClass = `video-panel video-card local-panel ${localVideoShape} ${localStatusText ? 'camera-off' : ''}`;
 
   return (
     <div className="app-shell">
@@ -831,21 +952,41 @@ export default function App() {
 
       <div className="main-layout">
         <div className="call-section">
-          <div className="video-layout">
-            <div className="video-panel remote-panel">
+          <div className={videoLayoutClass}>
+            <div className={remotePanelClass}>
               <div className="video-header">
                 <span>{remoteUserName}</span>
                 <span className="dot" />
               </div>
-              <video ref={remoteVideoRef} autoPlay playsInline />
+
+              {!remoteMediaState.cameraOff && (
+                <video ref={remoteVideoRef} autoPlay playsInline />
+              )}
+
+              {remoteStatusText && (
+                <div className="video-overlay">
+                  <div className="video-overlay-title">{remoteUserName}</div>
+                  <div className="video-overlay-text">{remoteStatusText}</div>
+                </div>
+              )}
             </div>
 
-            <div className="video-panel local-panel">
+            <div className={localPanelClass}>
               <div className="video-header">
                 <span>{userName || 'Вы'}</span>
                 <span className="self-tag">Вы</span>
               </div>
-              <video ref={localVideoRef} autoPlay playsInline muted />
+
+              {!isCameraOff && hasLocalVideoTrack && (
+                <video ref={localVideoRef} autoPlay playsInline muted />
+              )}
+
+              {localStatusText && (
+                <div className="video-overlay">
+                  <div className="video-overlay-title">{userName || 'Вы'}</div>
+                  <div className="video-overlay-text">{localStatusText}</div>
+                </div>
+              )}
             </div>
           </div>
 
