@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import './App.css';
 
+import AuthPage from './components/AuthPage';
+import { getMe } from './services/auth';
+
 const socket = io(import.meta.env.VITE_SERVER_URL, {
   transports: ['websocket', 'polling'],
 });
@@ -59,6 +62,10 @@ const rtcConfig = {
 };
 
 export default function App() {
+  const [authUser, setAuthUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authError, setAuthError] = useState('');
+
   const [roomId, setRoomId] = useState('room-101');
   const [userName, setUserName] = useState('Иван');
   const [remoteUserName, setRemoteUserName] = useState('Собеседник');
@@ -101,6 +108,32 @@ export default function App() {
   useEffect(() => {
     roomIdRef.current = roomId;
   }, [roomId]);
+
+  useEffect(() => {
+    async function checkAuth() {
+      const token = localStorage.getItem('token');
+
+      if (!token) {
+        setAuthChecked(true);
+        return;
+      }
+
+      try {
+        const result = await getMe(token);
+        setAuthUser(result.user);
+        setUserName(result.user.username || 'Иван');
+        setAuthError('');
+      } catch (error) {
+        localStorage.removeItem('token');
+        setAuthUser(null);
+        setAuthError('Сессия истекла. Войдите снова.');
+      } finally {
+        setAuthChecked(true);
+      }
+    }
+
+    checkAuth();
+  }, []);
 
   useEffect(() => {
     socket.on('room-created', () => {
@@ -882,6 +915,23 @@ export default function App() {
   const remotePanelClass = `video-panel video-card remote-panel ${remoteVideoShape} ${remoteStatusText ? 'camera-off' : ''}`;
   const localPanelClass = `video-panel video-card local-panel ${localVideoShape} ${localStatusText ? 'camera-off' : ''}`;
 
+  if (!authChecked) {
+    return <div className="auth-page">Проверяем авторизацию...</div>;
+  }
+
+  if (!authUser) {
+    return (
+      <AuthPage
+        onLoginSuccess={(user) => {
+          setAuthUser(user);
+          setUserName(user.username || 'Иван');
+          setAuthError('');
+        }}
+        authError={authError}
+      />
+    );
+  }
+
   return (
     <div className="app-shell">
       <div className="topbar">
@@ -893,7 +943,23 @@ export default function App() {
         <div className="topbar-right">
           <div className="timer-badge">Время звонка: {formattedCallTime}</div>
           <div className="status-badge">{status}</div>
+          <button
+            className="ghost-btn"
+            onClick={() => {
+              localStorage.removeItem('token');
+              setAuthUser(null);
+              setJoined(false);
+              setMessages([]);
+              setParticipants([]);
+              setStatus('Вы вышли из аккаунта');
+              stopAllMedia();
+              closePeerConnection();
+            }}
+          >
+            Выйти
+          </button>
         </div>
+        
       </div>
 
       <div className="setup-card">
