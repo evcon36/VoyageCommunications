@@ -448,7 +448,7 @@ export default function App() {
       return null;
     }
 
-    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);ы
+    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 
     const preferredConstraints = {
       audio: {
