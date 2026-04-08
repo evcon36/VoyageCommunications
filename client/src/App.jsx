@@ -117,6 +117,7 @@ export default function App() {
 
   const [localVideoShape, setLocalVideoShape] = useState('landscape');
   const [remoteVideoShape, setRemoteVideoShape] = useState('landscape');
+  const [primaryVideo, setPrimaryVideo] = useState('remote');
 
   const [remoteMediaState, setRemoteMediaState] = useState({
     cameraOff: false,
@@ -267,6 +268,7 @@ export default function App() {
     socket.on('user-disconnected', () => {
       setStatus('Собеседник отключился');
       setRemoteUserName('Собеседник');
+      setPrimaryVideo('remote');
       setCallStartedAt(null);
       setCallSeconds(0);
       setParticipants((prev) => prev.slice(0, 1));
@@ -970,6 +972,10 @@ export default function App() {
     }
   };
 
+  const swapVideoPanels = () => {
+    setPrimaryVideo((prev) => (prev === 'remote' ? 'local' : 'remote'));
+  };
+
   const closePeerConnection = () => {
     if (peerRef.current) {
       peerRef.current.ontrack = null;
@@ -1020,6 +1026,7 @@ export default function App() {
     setIsMuted(false);
     setIsCameraOff(false);
     setIsSharingScreen(false);
+    setPrimaryVideo('remote');
     setRemoteUserName('Собеседник');
     setStatus('Вы вышли из комнаты');
     setCallStartedAt(null);
@@ -1047,9 +1054,19 @@ export default function App() {
     micOff: remoteMediaState.micOff,
   });
 
-  const videoLayoutClass = `video-layout layout-${remoteVideoShape}-${localVideoShape}`;
-  const remotePanelClass = `video-panel video-card remote-panel ${remoteVideoShape} ${remoteStatusText ? 'camera-off' : ''}`;
-  const localPanelClass = `video-panel video-card local-panel ${localVideoShape} ${localStatusText ? 'camera-off' : ''}`;
+  const isRemotePrimary = primaryVideo === 'remote';
+
+  const primaryPanelClass = `video-panel video-card primary-video ${
+    isRemotePrimary ? `remote-panel ${remoteVideoShape}` : `local-panel ${localVideoShape}`
+  } ${
+    (isRemotePrimary ? remoteStatusText : localStatusText) ? 'camera-off' : ''
+  }`;
+
+  const pictureInPictureClass = `video-panel video-card pip-video ${
+    isRemotePrimary ? `local-panel ${localVideoShape}` : `remote-panel ${remoteVideoShape}`
+  } ${
+    (isRemotePrimary ? localStatusText : remoteStatusText) ? 'camera-off' : ''
+  }`;
 
   if (!authChecked) {
     return <div className="auth-page">Проверяем авторизацию...</div>;
@@ -1275,42 +1292,80 @@ export default function App() {
 
       <div className="main-layout">
         <div className="call-section">
-          <div className={videoLayoutClass}>
-            <div className={remotePanelClass}>
+          <div className="video-stage">
+            <div className={primaryPanelClass}>
               <div className="video-header">
-                <span>{remoteUserName}</span>
-                <span className="dot" />
+                <span>{isRemotePrimary ? remoteUserName : userName || 'Вы'}</span>
+                {isRemotePrimary ? <span className="dot" /> : <span className="self-tag">Вы</span>}
               </div>
 
-              {!remoteMediaState.cameraOff && (
-                <video ref={remoteVideoRef} autoPlay playsInline />
-              )}
+              {isRemotePrimary ? (
+                <>
+                  {!remoteMediaState.cameraOff && (
+                    <video ref={remoteVideoRef} autoPlay playsInline />
+                  )}
 
-              {remoteStatusText && (
-                <div className="video-overlay">
-                  <div className="video-overlay-title">{remoteUserName}</div>
-                  <div className="video-overlay-text">{remoteStatusText}</div>
-                </div>
+                  {remoteStatusText && (
+                    <div className="video-overlay">
+                      <div className="video-overlay-title">{remoteUserName}</div>
+                      <div className="video-overlay-text">{remoteStatusText}</div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  {!isCameraOff && (
+                    <video ref={localVideoRef} autoPlay playsInline muted />
+                  )}
+
+                  {localStatusText && (
+                    <div className="video-overlay">
+                      <div className="video-overlay-title">{userName || 'Вы'}</div>
+                      <div className="video-overlay-text">{localStatusText}</div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
-            <div className={localPanelClass}>
+            <button
+              type="button"
+              className={pictureInPictureClass}
+              onClick={swapVideoPanels}
+            >
               <div className="video-header">
-                <span>{userName || 'Вы'}</span>
-                <span className="self-tag">Вы</span>
+                <span>{isRemotePrimary ? userName || 'Вы' : remoteUserName}</span>
+                {isRemotePrimary ? <span className="self-tag">Вы</span> : <span className="dot" />}
               </div>
 
-              {!isCameraOff && (
-                <video ref={localVideoRef} autoPlay playsInline muted />
-              )}
+              {isRemotePrimary ? (
+                <>
+                  {!isCameraOff && (
+                    <video ref={localVideoRef} autoPlay playsInline muted />
+                  )}
 
-              {localStatusText && (
-                <div className="video-overlay">
-                  <div className="video-overlay-title">{userName || 'Вы'}</div>
-                  <div className="video-overlay-text">{localStatusText}</div>
-                </div>
+                  {localStatusText && (
+                    <div className="video-overlay">
+                      <div className="video-overlay-title">{userName || 'Вы'}</div>
+                      <div className="video-overlay-text">{localStatusText}</div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  {!remoteMediaState.cameraOff && (
+                    <video ref={remoteVideoRef} autoPlay playsInline />
+                  )}
+
+                  {remoteStatusText && (
+                    <div className="video-overlay">
+                      <div className="video-overlay-title">{remoteUserName}</div>
+                      <div className="video-overlay-text">{remoteStatusText}</div>
+                    </div>
+                  )}
+                </>
               )}
-            </div>
+            </button>
           </div>
 
           <div className="controls-bar">
