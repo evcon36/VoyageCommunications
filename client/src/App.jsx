@@ -75,6 +75,7 @@ export default function App() {
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
   const [isSharingScreen, setIsSharingScreen] = useState(false);
+  const [isFrontCamera, setIsFrontCamera] = useState(true);
   const [copied, setCopied] = useState(false);
 
   const [messages, setMessages] = useState([]);
@@ -468,9 +469,14 @@ export default function App() {
     }
   };
 
-  const startCameraMedia = async () => {
-    if (cameraStreamRef.current) {
+  const startCameraMedia = async (forceRestart = false) => {
+    if (cameraStreamRef.current && !forceRestart) {
       return cameraStreamRef.current;
+    }
+
+    if (forceRestart && cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
     }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -480,6 +486,10 @@ export default function App() {
 
     const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 
+    const preferredFacingMode = isMobile
+      ? { ideal: isFrontCamera ? 'user' : 'environment' }
+      : 'user';
+
     const preferredConstraints = {
       audio: {
         echoCancellation: true,
@@ -487,7 +497,7 @@ export default function App() {
         autoGainControl: true,
       },
       video: {
-        facingMode: isMobile ? { ideal: 'user' } : 'user',
+        facingMode: preferredFacingMode,
         width: { ideal: 640, max: 640 },
         height: { ideal: 360, max: 360 },
         frameRate: { ideal: 15, max: 15 },
@@ -788,6 +798,88 @@ export default function App() {
     setStatus(nextCameraOff ? 'Видео выключено' : 'Видео включено');
   };
 
+  const switchCamera = async () => {
+    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+
+    if (!isMobile) {
+      setStatus('Переключение камеры доступно только на мобильных устройствах');
+      return;
+    }
+
+    if (isSharingScreen) {
+      setStatus('Сначала остановите демонстрацию экрана');
+      return;
+    }
+
+    try {
+      const nextIsFrontCamera = !isFrontCamera;
+
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach((track) => track.stop());
+        cameraStreamRef.current = null;
+      }
+
+      setIsFrontCamera(nextIsFrontCamera);
+
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: {
+          facingMode: { ideal: nextIsFrontCamera ? 'user' : 'environment' },
+          width: { ideal: 640, max: 640 },
+          height: { ideal: 360, max: 360 },
+          frameRate: { ideal: 15, max: 15 },
+        },
+      });
+
+      cameraStreamRef.current = newStream;
+
+      newStream.getAudioTracks().forEach((track) => {
+        track.enabled = !isMuted;
+      });
+
+      newStream.getVideoTracks().forEach((track) => {
+        track.enabled = !isCameraOff;
+      });
+
+      updateLocalPreview();
+
+      if (peerRef.current) {
+        const audioTrack = newStream.getAudioTracks()[0];
+        const videoTrack = newStream.getVideoTracks()[0];
+
+        const audioSender = peerRef.current
+          .getSenders()
+          .find((sender) => sender.track && sender.track.kind === 'audio');
+
+        const videoSender = peerRef.current
+          .getSenders()
+          .find((sender) => sender.track && sender.track.kind === 'video');
+
+        if (audioSender && audioTrack) {
+          await audioSender.replaceTrack(audioTrack);
+        }
+
+        if (videoSender && videoTrack) {
+          await videoSender.replaceTrack(videoTrack);
+        }
+      }
+
+      setStatus(
+        nextIsFrontCamera
+          ? 'Переключено на фронтальную камеру'
+          : 'Переключено на основную камеру'
+      );
+    } catch (error) {
+      console.error('switchCamera error:', error);
+      setStatus('Не удалось переключить камеру');
+    }
+  };
+
+
   const startScreenShare = async () => {
     if (isSharingScreen) {
       await stopScreenShare();
@@ -938,6 +1030,7 @@ export default function App() {
       cameraOff: false,
       micOff: false,
     });
+    setIsFrontCamera(true);
   };
 
   const localVideoTrack = getCurrentVideoTrack();
@@ -1235,6 +1328,14 @@ export default function App() {
               disabled={!joined}
             >
               {isCameraOff ? 'Включить камеру' : 'Выключить камеру'}
+            </button>
+
+            <button
+              className="control-btn"
+              onClick={switchCamera}
+              disabled={!joined || isSharingScreen}
+            >
+              {isFrontCamera ? 'Задняя камера' : 'Фронтальная камера'}
             </button>
 
             <button
