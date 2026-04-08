@@ -33,39 +33,53 @@ export default function LoginForm({ onLoginSuccess, onSwitchToRegister }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="auth-form">
-      <h2>Вход</h2>
+    <form className="auth-form" onSubmit={handleSubmit}>
+      <div className="auth-form-head">
+        <h2>Вход</h2>
+        <p>Войдите в аккаунт, чтобы открыть доступ к видеозвонкам.</p>
+      </div>
 
-      <input
-        type="text"
-        name="username"
-        placeholder="Никнейм"
-        value={form.username}
-        onChange={handleChange}
-        required
-      />
+      {error && <div className="auth-alert auth-alert-error">{error}</div>}
 
-      <input
-        type="password"
-        name="password"
-        placeholder="Пароль"
-        value={form.password}
-        onChange={handleChange}
-        required
-      />
+      <div className="field-group">
+        <label htmlFor="login-username">Имя пользователя</label>
+        <input
+          id="login-username"
+          name="username"
+          type="text"
+          placeholder="Введите имя пользователя"
+          value={form.username}
+          onChange={handleChange}
+          required
+        />
+      </div>
 
-      {error && <p className="auth-error">{error}</p>}
+      <div className="field-group">
+        <label htmlFor="login-password">Пароль</label>
+        <input
+          id="login-password"
+          name="password"
+          type="password"
+          placeholder="Введите пароль"
+          value={form.password}
+          onChange={handleChange}
+          required
+        />
+      </div>
 
-      <button type="submit" disabled={loading}>
-        {loading ? 'Входим...' : 'Войти'}
-      </button>
+      <div className="auth-actions">
+        <button className="primary-btn" type="submit" disabled={loading}>
+          {loading ? 'Входим...' : 'Войти'}
+        </button>
 
-      <p>
-        Нет аккаунта?{' '}
-        <button type="button" onClick={onSwitchToRegister}>
+        <button
+          className="ghost-btn"
+          type="button"
+          onClick={onSwitchToRegister}
+        >
           Зарегистрироваться
         </button>
-      </p>
+      </div>
     </form>
   );
 }

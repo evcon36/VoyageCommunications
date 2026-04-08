@@ -35,40 +35,54 @@ export default function RegisterForm({ onSwitchToLogin }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="auth-form">
-      <h2>Регистрация</h2>
+    <form className="auth-form" onSubmit={handleSubmit}>
+      <div className="auth-form-head">
+        <h2>Регистрация</h2>
+        <p>Создайте аккаунт в том же интерфейсе, где работает основной видеосервис.</p>
+      </div>
 
-      <input
-        type="text"
-        name="username"
-        placeholder="Никнейм"
-        value={form.username}
-        onChange={handleChange}
-        required
-      />
+      {message && <div className="auth-alert auth-alert-success">{message}</div>}
+      {error && <div className="auth-alert auth-alert-error">{error}</div>}
 
-      <input
-        type="password"
-        name="password"
-        placeholder="Пароль"
-        value={form.password}
-        onChange={handleChange}
-        required
-      />
+      <div className="field-group">
+        <label htmlFor="register-username">Имя пользователя</label>
+        <input
+          id="register-username"
+          name="username"
+          type="text"
+          placeholder="Придумайте имя пользователя"
+          value={form.username}
+          onChange={handleChange}
+          required
+        />
+      </div>
 
-      {message && <p className="auth-success">{message}</p>}
-      {error && <p className="auth-error">{error}</p>}
+      <div className="field-group">
+        <label htmlFor="register-password">Пароль</label>
+        <input
+          id="register-password"
+          name="password"
+          type="password"
+          placeholder="Придумайте пароль"
+          value={form.password}
+          onChange={handleChange}
+          required
+        />
+      </div>
 
-      <button type="submit" disabled={loading}>
-        {loading ? 'Создаём...' : 'Создать аккаунт'}
-      </button>
+      <div className="auth-actions">
+        <button className="primary-btn" type="submit" disabled={loading}>
+          {loading ? 'Создаём...' : 'Создать аккаунт'}
+        </button>
 
-      <p>
-        Уже есть аккаунт?{' '}
-        <button type="button" onClick={onSwitchToLogin}>
+        <button
+          className="ghost-btn"
+          type="button"
+          onClick={onSwitchToLogin}
+        >
           Войти
         </button>
-      </p>
+      </div>
     </form>
   );
 }
