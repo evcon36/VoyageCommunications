@@ -448,7 +448,7 @@ export default function App() {
       return null;
     }
 
-    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);ы
 
     const preferredConstraints = {
       audio: {
@@ -596,13 +596,26 @@ export default function App() {
       });
 
       const videoTrack =
-        screenStreamRef.current?.getVideoTracks()[0] ||
-        stream.getVideoTracks()[0];
+      screenStreamRef.current?.getVideoTracks()[0] ||
+      stream.getVideoTracks()[0];
 
       if (videoTrack) {
         const videoSourceStream = screenStreamRef.current || stream;
-        peer.addTrack(videoTrack, videoSourceStream);
+
+        const sender = peer.addTrack(videoTrack, videoSourceStream);
+
+        const params = sender.getParameters();
+
+        if (!params.encodings) {
+          params.encodings = [{}];
+        }
+
+        params.encodings[0].maxBitrate = 400_000; // 400 kbps
+        params.encodings[0].maxFramerate = 15;
+
+        sender.setParameters(params).catch(console.error);
       }
+
     } else {
       console.warn('Peer создан без локального media stream');
     }
