@@ -709,3 +709,103 @@ input {
     width: 100%;
   }
 }
+
+.account-toggle-btn {
+  margin-left: 12px;
+}
+
+.account-panel {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  z-index: 50;
+  padding: 20px;
+  border-radius: 24px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(14px);
+}
+
+.account-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.account-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.account-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.account-info-card,
+.call-history-card {
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.account-info-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.account-info-row:last-child {
+  border-bottom: none;
+}
+
+.account-info-row span {
+  color: #a1a1aa;
+}
+
+.account-info-row strong {
+  color: #f3f4f6;
+  text-align: right;
+}
+
+.calls-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.call-history-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #f3f4f6;
+  margin-bottom: 8px;
+}
+
+.call-history-meta {
+  font-size: 14px;
+  color: #a1a1aa;
+  margin-bottom: 4px;
+}
+
+@media (max-width: 768px) {
+  .account-panel {
+    top: 16px;
+    right: 16px;
+    left: 16px;
+    width: auto;
+    max-width: none;
+  }
+}

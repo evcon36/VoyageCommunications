@@ -113,8 +113,23 @@ async function login(req, res) {
 
 async function me(req, res) {
   try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: {
+        id: true,
+        username: true,
+        createdAt: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        message: 'Пользователь не найден',
+      });
+    }
+
     return res.status(200).json({
-      user: req.user,
+      user,
     });
   } catch (error) {
     return res.status(500).json({

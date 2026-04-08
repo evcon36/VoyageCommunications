@@ -82,6 +82,36 @@ export default function App() {
   const [callSeconds, setCallSeconds] = useState(0);
   const [callStartedAt, setCallStartedAt] = useState(null);
 
+  const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false);
+  const [accountTab, setAccountTab] = useState('profile');
+
+  const [callHistory] = useState([
+    {
+      id: '1',
+      title: 'Тестовый звонок',
+      roomId: 'room-101',
+      duration: '12 мин 34 сек',
+      date: '08.04.2026',
+    },
+    {
+      id: '2',
+      title: 'Созвон по проекту',
+      roomId: 'room-205',
+      duration: '5 мин 10 сек',
+      date: '07.04.2026',
+    },
+  ]);
+
+  const daysSinceRegistration = useMemo(() => {
+    if (!authUser?.createdAt) return null;
+
+    const createdAt = new Date(authUser.createdAt);
+    const now = new Date();
+
+    const diffMs = now - createdAt;
+    return Math.max(1, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+  }, [authUser]);
+
   const [participants, setParticipants] = useState([]);
 
   const [localVideoShape, setLocalVideoShape] = useState('landscape');
@@ -956,6 +986,14 @@ export default function App() {
         <div className="topbar-right">
           <div className="timer-badge">Время звонка: {formattedCallTime}</div>
           <div className="status-badge">{status}</div>
+
+          <button
+            className="ghost-btn account-toggle-btn"
+            onClick={() => setIsAccountPanelOpen((prev) => !prev)}
+          >
+            ☰ Аккаунт
+          </button>
+
           <button
             className="ghost-btn"
             onClick={() => {
@@ -974,6 +1012,119 @@ export default function App() {
         </div>
         
       </div>
+
+      {isAccountPanelOpen && (
+        <aside className="account-panel">
+          <div className="account-panel-header">
+            <div>
+              <div className="brand">voyage account</div>
+              <div className="subtitle">Профиль и история активности</div>
+            </div>
+
+            <button
+              className="ghost-btn"
+              onClick={() => setIsAccountPanelOpen(false)}
+            >
+              Закрыть
+            </button>
+          </div>
+
+          <div className="account-tabs">
+            <button
+              className={accountTab === 'profile' ? 'primary-btn' : 'ghost-btn'}
+              onClick={() => setAccountTab('profile')}
+            >
+              Профиль
+            </button>
+
+            <button
+              className={accountTab === 'calls' ? 'primary-btn' : 'ghost-btn'}
+              onClick={() => setAccountTab('calls')}
+            >
+              История звонков
+            </button>
+
+            <button
+              className={accountTab === 'details' ? 'primary-btn' : 'ghost-btn'}
+              onClick={() => setAccountTab('details')}
+            >
+              Ещё
+            </button>
+          </div>
+
+          {accountTab === 'profile' && (
+            <div className="account-section">
+              <div className="account-info-card">
+                <div className="account-info-row">
+                  <span>Никнейм</span>
+                  <strong>{authUser?.username || '—'}</strong>
+                </div>
+
+                <div className="account-info-row">
+                  <span>ID аккаунта</span>
+                  <strong>{authUser?.id || '—'}</strong>
+                </div>
+
+                <div className="account-info-row">
+                  <span>Дата регистрации</span>
+                  <strong>
+                    {authUser?.createdAt
+                      ? new Date(authUser.createdAt).toLocaleDateString('ru-RU')
+                      : 'Пока недоступно'}
+                  </strong>
+                </div>
+
+                <div className="account-info-row">
+                  <span>С Voyage</span>
+                  <strong>
+                    {daysSinceRegistration ? `${daysSinceRegistration} дн.` : 'Пока недоступно'}
+                  </strong>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {accountTab === 'calls' && (
+            <div className="account-section">
+              <div className="calls-history-list">
+                {callHistory.length === 0 ? (
+                  <div className="participants-empty">История звонков пока пуста</div>
+                ) : (
+                  callHistory.map((call) => (
+                    <div className="call-history-card" key={call.id}>
+                      <div className="call-history-title">{call.title}</div>
+                      <div className="call-history-meta">Комната: {call.roomId}</div>
+                      <div className="call-history-meta">Длительность: {call.duration}</div>
+                      <div className="call-history-meta">Дата: {call.date}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {accountTab === 'details' && (
+            <div className="account-section">
+              <div className="account-info-card">
+                <div className="account-info-row">
+                  <span>Статус</span>
+                  <strong>Активный пользователь</strong>
+                </div>
+
+                <div className="account-info-row">
+                  <span>Продукт</span>
+                  <strong>VoyageCommunications</strong>
+                </div>
+
+                <div className="account-info-row">
+                  <span>Текущий этап</span>
+                  <strong>MVP / WebRTC + Auth</strong>
+                </div>
+              </div>
+            </div>
+          )}
+        </aside>
+      )}
 
       <div className="setup-card">
         <div className="field-group">
