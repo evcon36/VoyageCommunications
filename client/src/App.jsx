@@ -448,6 +448,8 @@ export default function App() {
       return null;
     }
 
+    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+
     const preferredConstraints = {
       audio: {
         echoCancellation: true,
