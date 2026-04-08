@@ -1294,11 +1294,6 @@ export default function App() {
         <div className="call-section">
           <div className="video-stage">
             <div className={primaryPanelClass}>
-              <div className="video-header">
-                <span>{isRemotePrimary ? remoteUserName : userName || 'Вы'}</span>
-                {isRemotePrimary ? <span className="dot" /> : <span className="self-tag">Вы</span>}
-              </div>
-
               {isRemotePrimary ? (
                 <>
                   {!remoteMediaState.cameraOff && (
@@ -1307,7 +1302,6 @@ export default function App() {
 
                   {remoteStatusText && (
                     <div className="video-overlay">
-                      <div className="video-overlay-title">{remoteUserName}</div>
                       <div className="video-overlay-text">{remoteStatusText}</div>
                     </div>
                   )}
@@ -1315,12 +1309,17 @@ export default function App() {
               ) : (
                 <>
                   {!isCameraOff && (
-                    <video ref={localVideoRef} autoPlay playsInline muted />
+                    <video
+                      ref={localVideoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="local-video-feed"
+                    />
                   )}
 
                   {localStatusText && (
                     <div className="video-overlay">
-                      <div className="video-overlay-title">{userName || 'Вы'}</div>
                       <div className="video-overlay-text">{localStatusText}</div>
                     </div>
                   )}
@@ -1333,20 +1332,20 @@ export default function App() {
               className={pictureInPictureClass}
               onClick={swapVideoPanels}
             >
-              <div className="video-header">
-                <span>{isRemotePrimary ? userName || 'Вы' : remoteUserName}</span>
-                {isRemotePrimary ? <span className="self-tag">Вы</span> : <span className="dot" />}
-              </div>
-
               {isRemotePrimary ? (
                 <>
                   {!isCameraOff && (
-                    <video ref={localVideoRef} autoPlay playsInline muted />
+                    <video
+                      ref={localVideoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="local-video-feed"
+                    />
                   )}
 
                   {localStatusText && (
                     <div className="video-overlay">
-                      <div className="video-overlay-title">{userName || 'Вы'}</div>
                       <div className="video-overlay-text">{localStatusText}</div>
                     </div>
                   )}
@@ -1359,7 +1358,6 @@ export default function App() {
 
                   {remoteStatusText && (
                     <div className="video-overlay">
-                      <div className="video-overlay-title">{remoteUserName}</div>
                       <div className="video-overlay-text">{remoteStatusText}</div>
                     </div>
                   )}
