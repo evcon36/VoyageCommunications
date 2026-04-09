@@ -869,8 +869,6 @@ input {
   height: 100%;
   object-fit: cover;
   display: block;
-  transform: none !important;
-  -webkit-transform: none !important;
 }
 
 .pip-video .video-header,
@@ -916,13 +914,12 @@ input {
     width: 100%;
     height: 100%;
     object-fit: cover;
-    transform: none !important;
-    -webkit-transform: none !important;
   }
 }
 
 .local-video-feed {
-  transform: none !important;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
 }
 
 .local-preview-overlay {

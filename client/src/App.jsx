@@ -129,6 +129,7 @@ export default function App() {
   const chatBodyRef = useRef(null);
 
   const localVideoRef = useRef(null);
+  const localPreviewOverlayVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
 
   const peerRef = useRef(null);
@@ -319,6 +320,10 @@ export default function App() {
   }, [callStartedAt]);
 
   useEffect(() => {
+    updateLocalPreview();
+  }, [isLocalPreviewOpen, isFrontCamera, isSharingScreen]);
+
+  useEffect(() => {
     if (!chatBodyRef.current) return;
     chatBodyRef.current.scrollTop = chatBodyRef.current.scrollHeight;
   }, [messages]);
@@ -422,15 +427,26 @@ export default function App() {
     return null;
   };
 
-  const updateLocalPreview = () => {
-    if (!localVideoRef.current) return;
+  const updateLocalPreview = async () => {
+    const previewStream = screenStreamRef.current || cameraStreamRef.current || null;
 
-    if (screenStreamRef.current) {
-      localVideoRef.current.srcObject = screenStreamRef.current;
-    } else if (cameraStreamRef.current) {
-      localVideoRef.current.srcObject = cameraStreamRef.current;
-    } else {
-      localVideoRef.current.srcObject = null;
+    const targets = [localVideoRef.current, localPreviewOverlayVideoRef.current];
+
+    for (const videoElement of targets) {
+      if (!videoElement) continue;
+
+      videoElement.srcObject = previewStream;
+      videoElement.autoplay = true;
+      videoElement.playsInline = true;
+      videoElement.muted = true;
+
+      if (previewStream) {
+        try {
+          await videoElement.play();
+        } catch (playError) {
+          console.warn('video.play() не выполнился сразу:', playError);
+        }
+      }
     }
   };
 
@@ -1255,7 +1271,7 @@ export default function App() {
 
             {!isCameraOff && (
               <video
-                ref={localVideoRef}
+                ref={localPreviewOverlayVideoRef}
                 autoPlay
                 playsInline
                 muted
