@@ -206,32 +206,26 @@ input {
   aspect-ratio: 16 / 9;
 }
 
-.video-card.portrait {
-  aspect-ratio: 9 / 16;
-  max-width: 420px;
-  justify-self: center;
+.video-card {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  border-radius: 28px;
+  overflow: hidden;
+  background: #0b0b0b;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
 }
 
 .video-card.camera-off {
-  aspect-ratio: auto;
   min-height: 180px;
-  max-height: 220px;
+  max-height: none;
 }
 
-.video-card video {
-  width: 100%;
-  height: 100%;
-  display: block;
-  background: #000;
-  object-fit: contain;
-}
-
-.remote-panel video {
-  transform: scaleX(1);
-}
-
-.local-panel video {
-  transform: scaleX(-1);
+.remote-panel video,
+.local-panel video,
+.local-video-feed {
+  transform: none !important;
 }
 
 .video-header {
@@ -838,8 +832,12 @@ input {
   position: absolute;
   right: 16px;
   bottom: 16px;
-  width: 140px;
-  height: 190px;
+  width: 128px;
+  height: 176px;
+  min-width: 128px;
+  max-width: 128px;
+  min-height: 176px;
+  max-height: 176px;
   border-radius: 18px;
   overflow: hidden;
   z-index: 5;
@@ -848,13 +846,20 @@ input {
   background: rgba(15, 23, 42, 0.95);
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .pip-video video {
-  width: 100%;
-  height: 100%;
+  width: 128px;
+  height: 176px;
+  min-width: 128px;
+  max-width: 128px;
+  min-height: 176px;
+  max-height: 176px;
   object-fit: cover;
   display: block;
+  transform: none !important;
 }
 
 .pip-video .video-header,
@@ -876,22 +881,6 @@ input {
   transition: transform 0.2s ease;
 }
 
-@media (max-width: 900px) {
-  .video-stage,
-  .primary-video,
-  .primary-video video {
-    min-height: 420px;
-  }
-
-  .pip-video {
-    width: 140px;
-    height: 190px;
-    right: 12px;
-    bottom: 12px;
-    border-radius: 18px;
-  }
-}
-
 @media (max-width: 640px) {
   .video-stage,
   .primary-video,
@@ -900,11 +889,26 @@ input {
   }
 
   .pip-video {
-    width: 92px;
-    height: 124px;
     right: 10px;
     bottom: 10px;
+    width: 96px;
+    height: 132px;
+    min-width: 96px;
+    max-width: 96px;
+    min-height: 132px;
+    max-height: 132px;
     border-radius: 14px;
+  }
+
+  .pip-video video {
+    width: 96px;
+    height: 132px;
+    min-width: 96px;
+    max-width: 96px;
+    min-height: 132px;
+    max-height: 132px;
+    object-fit: cover;
+    transform: none !important;
   }
 }
 
