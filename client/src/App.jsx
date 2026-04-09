@@ -1301,7 +1301,7 @@ export default function App() {
                       ref={remoteVideoRef}
                       autoPlay
                       playsInline
-                      style={{ transform: 'none', WebkitTransform: 'none' }}
+                      
                     />
                   )}
 
@@ -1320,7 +1320,7 @@ export default function App() {
                       playsInline
                       muted
                       className="local-video-feed"
-                      style={{ transform: 'none', WebkitTransform: 'none' }}
+                      
                     />
                   )}
 
@@ -1347,7 +1347,7 @@ export default function App() {
                       playsInline
                       muted
                       className="local-video-feed"
-                      style={{ transform: 'none', WebkitTransform: 'none' }}
+                      
                     />
                   )}
 
@@ -1364,7 +1364,7 @@ export default function App() {
                       ref={remoteVideoRef}
                       autoPlay
                       playsInline
-                      style={{ transform: 'none', WebkitTransform: 'none' }}
+                      
                     />
                   )}
 

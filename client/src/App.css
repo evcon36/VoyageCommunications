@@ -222,14 +222,19 @@ input {
   max-height: none;
 }
 
-video,
 .remote-panel video,
-.local-panel video,
-.primary-video video,
-.pip-video video,
-.local-video-feed {
+.primary-video.remote-panel video,
+.pip-video.remote-panel video {
   transform: none !important;
   -webkit-transform: none !important;
+}
+
+.local-panel video,
+.primary-video.local-panel video,
+.pip-video.local-panel video,
+.local-video-feed {
+  transform: scaleX(-1) !important;
+  -webkit-transform: scaleX(-1) !important;
 }
 
 .video-header {
