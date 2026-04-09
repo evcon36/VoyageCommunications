@@ -1297,7 +1297,12 @@ export default function App() {
               {isRemotePrimary ? (
                 <>
                   {!remoteMediaState.cameraOff && (
-                    <video ref={remoteVideoRef} autoPlay playsInline />
+                    <video
+                      ref={remoteVideoRef}
+                      autoPlay
+                      playsInline
+                      style={{ transform: 'none', WebkitTransform: 'none' }}
+                    />
                   )}
 
                   {remoteStatusText && (
@@ -1315,6 +1320,7 @@ export default function App() {
                       playsInline
                       muted
                       className="local-video-feed"
+                      style={{ transform: 'none', WebkitTransform: 'none' }}
                     />
                   )}
 
@@ -1341,6 +1347,7 @@ export default function App() {
                       playsInline
                       muted
                       className="local-video-feed"
+                      style={{ transform: 'none', WebkitTransform: 'none' }}
                     />
                   )}
 
@@ -1353,7 +1360,12 @@ export default function App() {
               ) : (
                 <>
                   {!remoteMediaState.cameraOff && (
-                    <video ref={remoteVideoRef} autoPlay playsInline />
+                    <video
+                      ref={remoteVideoRef}
+                      autoPlay
+                      playsInline
+                      style={{ transform: 'none', WebkitTransform: 'none' }}
+                    />
                   )}
 
                   {remoteStatusText && (

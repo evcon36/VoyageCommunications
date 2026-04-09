@@ -222,10 +222,14 @@ input {
   max-height: none;
 }
 
+video,
 .remote-panel video,
 .local-panel video,
+.primary-video video,
+.pip-video video,
 .local-video-feed {
   transform: none !important;
+  -webkit-transform: none !important;
 }
 
 .video-header {
@@ -832,12 +836,13 @@ input {
   position: absolute;
   right: 16px;
   bottom: 16px;
-  width: 128px;
-  height: 176px;
-  min-width: 128px;
-  max-width: 128px;
-  min-height: 176px;
-  max-height: 176px;
+  width: 120px;
+  height: 160px;
+  min-width: 120px;
+  max-width: 120px;
+  min-height: 160px;
+  max-height: 160px;
+  aspect-ratio: 3 / 4;
   border-radius: 18px;
   overflow: hidden;
   z-index: 5;
@@ -851,15 +856,12 @@ input {
 }
 
 .pip-video video {
-  width: 128px;
-  height: 176px;
-  min-width: 128px;
-  max-width: 128px;
-  min-height: 176px;
-  max-height: 176px;
+  width: 100%;
+  height: 100%;
   object-fit: cover;
   display: block;
   transform: none !important;
+  -webkit-transform: none !important;
 }
 
 .pip-video .video-header,
@@ -891,24 +893,22 @@ input {
   .pip-video {
     right: 10px;
     bottom: 10px;
-    width: 96px;
-    height: 132px;
-    min-width: 96px;
-    max-width: 96px;
-    min-height: 132px;
-    max-height: 132px;
+    width: 88px;
+    height: 118px;
+    min-width: 88px;
+    max-width: 88px;
+    min-height: 118px;
+    max-height: 118px;
+    aspect-ratio: 3 / 4;
     border-radius: 14px;
   }
 
   .pip-video video {
-    width: 96px;
-    height: 132px;
-    min-width: 96px;
-    max-width: 96px;
-    min-height: 132px;
-    max-height: 132px;
+    width: 100%;
+    height: 100%;
     object-fit: cover;
     transform: none !important;
+    -webkit-transform: none !important;
   }
 }
 
