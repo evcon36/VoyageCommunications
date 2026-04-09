@@ -118,6 +118,7 @@ export default function App() {
   const [localVideoShape, setLocalVideoShape] = useState('landscape');
   const [remoteVideoShape, setRemoteVideoShape] = useState('landscape');
   const [primaryVideo, setPrimaryVideo] = useState('remote');
+  const [isLocalPreviewOpen, setIsLocalPreviewOpen] = useState(false);
 
   const [remoteMediaState, setRemoteMediaState] = useState({
     cameraOff: false,
@@ -269,9 +270,11 @@ export default function App() {
       setStatus('Собеседник отключился');
       setRemoteUserName('Собеседник');
       setPrimaryVideo('remote');
+      setIsLocalPreviewOpen(false);
       setCallStartedAt(null);
       setCallSeconds(0);
       setParticipants((prev) => prev.slice(0, 1));
+      
 
       setRemoteMediaState({
         cameraOff: false,
@@ -972,8 +975,8 @@ export default function App() {
     }
   };
 
-  const swapVideoPanels = () => {
-    setPrimaryVideo((prev) => (prev === 'remote' ? 'local' : 'remote'));
+  const toggleLocalPreviewOverlay = () => {
+    setIsLocalPreviewOpen((prev) => !prev);
   };
 
   const closePeerConnection = () => {
@@ -1027,6 +1030,7 @@ export default function App() {
     setIsCameraOff(false);
     setIsSharingScreen(false);
     setPrimaryVideo('remote');
+    setIsLocalPreviewOpen(false);
     setRemoteUserName('Собеседник');
     setStatus('Вы вышли из комнаты');
     setCallStartedAt(null);
@@ -1054,18 +1058,17 @@ export default function App() {
     micOff: remoteMediaState.micOff,
   });
 
-  const isRemotePrimary = primaryVideo === 'remote';
+  const localVideoMirrorStyle = {
+    transform: isFrontCamera ? 'scaleX(-1)' : 'none',
+    WebkitTransform: isFrontCamera ? 'scaleX(-1)' : 'none',
+  };
 
-  const primaryPanelClass = `video-panel video-card primary-video ${
-    isRemotePrimary ? `remote-panel ${remoteVideoShape}` : `local-panel ${localVideoShape}`
-  } ${
-    (isRemotePrimary ? remoteStatusText : localStatusText) ? 'camera-off' : ''
+  const primaryPanelClass = `video-panel video-card primary-video remote-panel ${remoteVideoShape} ${
+    remoteStatusText ? 'camera-off' : ''
   }`;
 
-  const pictureInPictureClass = `video-panel video-card pip-video ${
-    isRemotePrimary ? `local-panel ${localVideoShape}` : `remote-panel ${remoteVideoShape}`
-  } ${
-    (isRemotePrimary ? localStatusText : remoteStatusText) ? 'camera-off' : ''
+  const pictureInPictureClass = `video-panel video-card pip-video local-panel ${localVideoShape} ${
+    localStatusText ? 'camera-off' : ''
   }`;
 
   if (!authChecked) {
@@ -1236,6 +1239,40 @@ export default function App() {
         </aside>
       )}
 
+      {isLocalPreviewOpen && (
+        <div className="local-preview-overlay" onClick={toggleLocalPreviewOverlay}>
+          <div
+            className="local-preview-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="local-preview-close"
+              onClick={toggleLocalPreviewOverlay}
+            >
+              Закрыть
+            </button>
+
+            {!isCameraOff && (
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="local-preview-video local-video-feed"
+                style={localVideoMirrorStyle}
+              />
+            )}
+
+            {localStatusText && (
+              <div className="video-overlay">
+                <div className="video-overlay-text">{localStatusText}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="setup-card">
         <div className="field-group">
           <label>Ваше имя</label>
@@ -1294,86 +1331,37 @@ export default function App() {
         <div className="call-section">
           <div className="video-stage">
             <div className={primaryPanelClass}>
-              {isRemotePrimary ? (
-                <>
-                  {!remoteMediaState.cameraOff && (
-                    <video
-                      ref={remoteVideoRef}
-                      autoPlay
-                      playsInline
-                      
-                    />
-                  )}
+              {!remoteMediaState.cameraOff && (
+                <video ref={remoteVideoRef} autoPlay playsInline />
+              )}
 
-                  {remoteStatusText && (
-                    <div className="video-overlay">
-                      <div className="video-overlay-text">{remoteStatusText}</div>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  {!isCameraOff && (
-                    <video
-                      ref={localVideoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      className="local-video-feed"
-                      
-                    />
-                  )}
-
-                  {localStatusText && (
-                    <div className="video-overlay">
-                      <div className="video-overlay-text">{localStatusText}</div>
-                    </div>
-                  )}
-                </>
+              {remoteStatusText && (
+                <div className="video-overlay">
+                  <div className="video-overlay-text">{remoteStatusText}</div>
+                </div>
               )}
             </div>
 
             <button
               type="button"
               className={pictureInPictureClass}
-              onClick={swapVideoPanels}
+              onClick={toggleLocalPreviewOverlay}
             >
-              {isRemotePrimary ? (
-                <>
-                  {!isCameraOff && (
-                    <video
-                      ref={localVideoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      className="local-video-feed"
-                      
-                    />
-                  )}
+              {!isCameraOff && (
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="local-video-feed"
+                  style={localVideoMirrorStyle}
+                />
+              )}
 
-                  {localStatusText && (
-                    <div className="video-overlay">
-                      <div className="video-overlay-text">{localStatusText}</div>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  {!remoteMediaState.cameraOff && (
-                    <video
-                      ref={remoteVideoRef}
-                      autoPlay
-                      playsInline
-                      
-                    />
-                  )}
-
-                  {remoteStatusText && (
-                    <div className="video-overlay">
-                      <div className="video-overlay-text">{remoteStatusText}</div>
-                    </div>
-                  )}
-                </>
+              {localStatusText && (
+                <div className="video-overlay">
+                  <div className="video-overlay-text">{localStatusText}</div>
+                </div>
               )}
             </button>
           </div>
