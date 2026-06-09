@@ -290,7 +290,9 @@ export default function App() {
         },
         webRTCConfig: {
           iceServers,
-          iceTransportPolicy: 'all',
+          // relay = весь медиатрафик через coturn TCP/TLS
+          // роутер видит обычный TCP, не перегружается UDP
+          iceTransportPolicy: turnUser ? 'relay' : 'all',
         },
       });
       livekitRoomRef.current = room;
