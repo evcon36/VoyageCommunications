@@ -21,7 +21,7 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: true,
+    origin: process.env.CLIENT_URL || 'http://localhost:5173',
     methods: ['GET', 'POST'],
   },
 });
@@ -67,7 +67,7 @@ io.on('connection', (socket) => {
     const room = io.sockets.adapter.rooms.get(roomId);
     const roomSize = room ? room.size : 0;
 
-    if (roomSize >= 2) {
+    if (roomSize >= 10) {
       socket.emit('room-full');
       return;
     }
@@ -105,27 +105,26 @@ io.on('connection', (socket) => {
       socket.emit('room-created', {
         yourName: socket.data.userName,
       });
-    } else if (updatedUsers.length === 2) {
-      const [firstUser, secondUser] = updatedUsers;
-
-      io.to(secondUser.socketId).emit('room-joined', {
-        yourName: secondUser.userName,
-        remoteUserName: firstUser.userName || 'Собеседник',
-      });
-
-      io.to(firstUser.socketId).emit('participant-joined', {
-        remoteUserName: secondUser.userName,
-      });
-
-      io.to(firstUser.socketId).emit('init', {
-        isInitiator: true,
-      });
-
-      io.to(secondUser.socketId).emit('init', {
-        isInitiator: false,
-      });
     } else {
-      console.warn('Unexpected roomUsers length:', roomId, updatedUsers.length, updatedUsers);
+      // Новый участник в уже существующей комнате
+      const newUser = updatedUsers[updatedUsers.length - 1];
+
+      io.to(newUser.socketId).emit('room-joined', {
+        yourName: newUser.userName,
+        remoteUserName: updatedUsers[0].userName || 'Участник',
+      });
+
+      // Сообщаем остальным о новом участнике
+      socket.to(roomId).emit('participant-joined', {
+        remoteUserName: newUser.userName,
+      });
+
+      // WebRTC peer connection только между первым и вторым (P2P)
+      if (updatedUsers.length === 2) {
+        const [firstUser, secondUser] = updatedUsers;
+        io.to(firstUser.socketId).emit('init', { isInitiator: true });
+        io.to(secondUser.socketId).emit('init', { isInitiator: false });
+      }
     }
   });
 
