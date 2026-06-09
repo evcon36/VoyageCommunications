@@ -26,29 +26,36 @@ function ParticipantTile({ participant, isLocal, isFrontCamera }) {
 
   useEffect(() => {
     if (!participant) return;
-
-    const attachVideo = () => {
-      const screenPub = participant.getTrackPublication(Track.Source.ScreenShare);
-      const cameraPub = participant.getTrackPublication(Track.Source.Camera);
-      const pub = screenPub?.isSubscribed || isLocal ? screenPub : null;
-      const activePub = pub || (cameraPub?.isSubscribed || isLocal ? cameraPub : null);
-      const track = activePub?.track;
-
-      if (track && videoRef.current) {
-        track.attach(videoRef.current);
-        setHasVideo(true);
-      } else {
-        if (videoRef.current) videoRef.current.srcObject = null;
-        setHasVideo(false);
-      }
-    };
+    let attached = null;
 
     const updateState = () => {
       const cameraPub = participant.getTrackPublication(Track.Source.Camera);
+      const screenPub = participant.getTrackPublication(Track.Source.ScreenShare);
       const micPub = participant.getTrackPublication(Track.Source.Microphone);
-      setIsCamOff(cameraPub?.isMuted ?? true);
+
+      // For local: track exists directly; for remote: need isSubscribed
+      const camTrack = cameraPub?.track && (isLocal || cameraPub.isSubscribed) ? cameraPub.track : null;
+      const screenTrack = screenPub?.track && (isLocal || screenPub.isSubscribed) ? screenPub.track : null;
+      const activeTrack = screenTrack || camTrack;
+
+      const camMuted = cameraPub ? cameraPub.isMuted : true;
+      setIsCamOff(camMuted);
       setIsMicOff(micPub?.isMuted ?? false);
-      attachVideo();
+
+      if (activeTrack && !camMuted && videoRef.current) {
+        if (attached !== activeTrack) {
+          if (attached) attached.detach(videoRef.current);
+          activeTrack.attach(videoRef.current);
+          attached = activeTrack;
+        }
+        setHasVideo(true);
+      } else {
+        if (attached && videoRef.current) {
+          attached.detach(videoRef.current);
+          attached = null;
+        }
+        setHasVideo(false);
+      }
     };
 
     updateState();
@@ -67,6 +74,10 @@ function ParticipantTile({ participant, isLocal, isFrontCamera }) {
       participant.off('trackUnsubscribed', updateState);
       participant.off('trackMuted', updateState);
       participant.off('trackUnmuted', updateState);
+      if (attached && videoRef.current) {
+        try { attached.detach(videoRef.current); } catch {}
+        attached = null;
+      }
     };
   }, [participant, isLocal]);
 
@@ -134,6 +145,7 @@ export default function App() {
   ]);
 
   const livekitRoomRef = useRef(null);
+  const joiningRef = useRef(false);
   const [renderTick, setRenderTick] = useState(0);
   const forceUpdate = useCallback(() => setRenderTick(t => t + 1), []);
 
@@ -208,7 +220,8 @@ export default function App() {
   }, [joined, renderTick]);
 
   const joinRoom = async () => {
-    if (!roomId.trim() || !userName.trim() || joined) return;
+    if (!roomId.trim() || !userName.trim() || joined || joiningRef.current) return;
+    joiningRef.current = true;
     setStatus('Получаем токен...');
 
     try {
@@ -234,6 +247,7 @@ export default function App() {
       livekitRoomRef.current = room;
 
       room.on(RoomEvent.Connected, () => {
+        joiningRef.current = false;
         setJoined(true);
         setCallStartedAt(Date.now());
         setStatus('Подключено');
@@ -241,6 +255,7 @@ export default function App() {
       });
 
       room.on(RoomEvent.Disconnected, () => {
+        joiningRef.current = false;
         setJoined(false);
         setCallStartedAt(null);
         setCallSeconds(0);
@@ -279,13 +294,17 @@ export default function App() {
       console.error('joinRoom error:', error);
       setStatus(`Ошибка: ${error.message}`);
       livekitRoomRef.current = null;
+      joiningRef.current = false;
     }
   };
 
   const leaveCall = async () => {
-    if (livekitRoomRef.current) {
-      await livekitRoomRef.current.disconnect();
-      livekitRoomRef.current = null;
+    joiningRef.current = false;
+    const room = livekitRoomRef.current;
+    livekitRoomRef.current = null;
+    if (room) {
+      room.removeAllListeners();
+      await room.disconnect();
     }
     socket.emit('leave-room', roomIdRef.current);
     setJoined(false);
