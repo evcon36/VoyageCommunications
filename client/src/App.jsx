@@ -261,6 +261,22 @@ export default function App() {
 
       const { token: lkToken, wsUrl } = await resp.json();
 
+      const turnUser = import.meta.env.VITE_TURN_USERNAME;
+      const turnCred = import.meta.env.VITE_TURN_CREDENTIAL;
+      const iceServers = [
+        { urls: 'stun:stun.l.google.com:19302' },
+      ];
+      if (turnUser && turnCred) {
+        iceServers.push({
+          urls: [
+            `turn:voyage-community.ru:3478`,
+            `turns:voyage-community.ru:5349`,
+          ],
+          username: turnUser,
+          credential: turnCred,
+        });
+      }
+
       const room = new Room({
         adaptiveStream: true,
         dynacast: true,
@@ -271,6 +287,10 @@ export default function App() {
           simulcast: false,
           videoEncoding: { maxBitrate: 400_000, maxFramerate: 15 },
           videoSimulcastLayers: [],
+        },
+        webRTCConfig: {
+          iceServers,
+          iceTransportPolicy: turnUser ? 'relay' : 'all',
         },
       });
       livekitRoomRef.current = room;
