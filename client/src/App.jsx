@@ -88,15 +88,14 @@ function ParticipantTile({ participant, isLocal, isFrontCamera }) {
 
   return (
     <div className="participant-tile">
-      {hasVideo && !isCamOff ? (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted={isLocal}
-          style={mirrorStyle}
-        />
-      ) : (
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted={isLocal}
+        style={{ ...mirrorStyle, display: hasVideo && !isCamOff ? 'block' : 'none' }}
+      />
+      {(!hasVideo || isCamOff) && (
         <div className="tile-no-video">
           <div className="tile-avatar">
             {(participant.identity || '?')[0].toUpperCase()}
