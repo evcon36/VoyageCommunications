@@ -290,7 +290,7 @@ export default function App() {
         },
         webRTCConfig: {
           iceServers,
-          iceTransportPolicy: turnUser ? 'relay' : 'all',
+          iceTransportPolicy: 'all',
         },
       });
       livekitRoomRef.current = room;
