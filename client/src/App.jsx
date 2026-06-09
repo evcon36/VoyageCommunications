@@ -243,7 +243,18 @@ export default function App() {
 
       const { token: lkToken, wsUrl } = await resp.json();
 
-      const room = new Room({ adaptiveStream: true, dynacast: true });
+      const room = new Room({
+        adaptiveStream: true,
+        dynacast: true,
+        videoCaptureDefaults: {
+          resolution: { width: 640, height: 360, frameRate: 15 },
+        },
+        publishDefaults: {
+          simulcast: false,
+          videoEncoding: { maxBitrate: 400_000, maxFramerate: 15 },
+          videoSimulcastLayers: [],
+        },
+      });
       livekitRoomRef.current = room;
 
       room.on(RoomEvent.Connected, () => {
