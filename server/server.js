@@ -5,6 +5,7 @@ const http = require('http');
 const cors = require('cors');
 const { Server } = require('socket.io');
 const authRoutes = require('./src/routes/auth.routes');
+const roomsRoutes = require('./src/routes/rooms.routes');
 
 const app = express();
 
@@ -196,6 +197,7 @@ io.on('connection', (socket) => {
 });
 
 app.use('/auth', authRoutes);
+app.use('/rooms', roomsRoutes);
 
 app.get('/', (_, res) => {
   res.send('Backend is running');

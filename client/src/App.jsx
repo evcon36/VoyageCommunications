@@ -1,60 +1,109 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { io } from 'socket.io-client';
+import { Room, RoomEvent, Track } from 'livekit-client';
 import './App.css';
-
 import AuthPage from './components/AuthPage';
 import { getMe } from './services/auth';
 
-const socket = io(import.meta.env.VITE_SERVER_URL, {
-  transports: ['websocket', 'polling'],
-});
+const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:4000';
 
-socket.on('connect', () => {
-  console.log('Socket connected in browser:', socket.id);
-});
+const socket = io(SERVER_URL, { transports: ['websocket', 'polling'] });
 
-socket.on('connect_error', (error) => {
-  console.error('Socket connect error:', error);
-});
+// --- Grid: cols by participant count ---
+function getGridCols(n) {
+  if (n <= 1) return 1;
+  if (n <= 4) return 2;
+  if (n <= 9) return 3;
+  return 4;
+}
 
-const iceServers = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-];
+// --- Single participant tile ---
+function ParticipantTile({ participant, isLocal, isFrontCamera }) {
+  const videoRef = useRef(null);
+  const [hasVideo, setHasVideo] = useState(false);
+  const [isMicOff, setIsMicOff] = useState(false);
+  const [isCamOff, setIsCamOff] = useState(false);
 
-if (
-  import.meta.env.VITE_TURN_USERNAME &&
-  import.meta.env.VITE_TURN_CREDENTIAL
-) {
-  iceServers.push(
-    {
-      urls: 'turn:voyage-community.ru:3478',
-      username: import.meta.env.VITE_TURN_USERNAME,
-      credential: import.meta.env.VITE_TURN_CREDENTIAL,
-    },
-    {
-      urls: 'turn:voyage-community.ru:3478?transport=tcp',
-      username: import.meta.env.VITE_TURN_USERNAME,
-      credential: import.meta.env.VITE_TURN_CREDENTIAL,
-    },
-    {
-      urls: 'turns:voyage-community.ru:5349',
-      username: import.meta.env.VITE_TURN_USERNAME,
-      credential: import.meta.env.VITE_TURN_CREDENTIAL,
-    }
+  useEffect(() => {
+    if (!participant) return;
+
+    const attachVideo = () => {
+      const screenPub = participant.getTrackPublication(Track.Source.ScreenShare);
+      const cameraPub = participant.getTrackPublication(Track.Source.Camera);
+      const pub = screenPub?.isSubscribed || isLocal ? screenPub : null;
+      const activePub = pub || (cameraPub?.isSubscribed || isLocal ? cameraPub : null);
+      const track = activePub?.track;
+
+      if (track && videoRef.current) {
+        track.attach(videoRef.current);
+        setHasVideo(true);
+      } else {
+        if (videoRef.current) videoRef.current.srcObject = null;
+        setHasVideo(false);
+      }
+    };
+
+    const updateState = () => {
+      const cameraPub = participant.getTrackPublication(Track.Source.Camera);
+      const micPub = participant.getTrackPublication(Track.Source.Microphone);
+      setIsCamOff(cameraPub?.isMuted ?? true);
+      setIsMicOff(micPub?.isMuted ?? false);
+      attachVideo();
+    };
+
+    updateState();
+
+    participant.on('trackPublished', updateState);
+    participant.on('trackUnpublished', updateState);
+    participant.on('trackSubscribed', updateState);
+    participant.on('trackUnsubscribed', updateState);
+    participant.on('trackMuted', updateState);
+    participant.on('trackUnmuted', updateState);
+
+    return () => {
+      participant.off('trackPublished', updateState);
+      participant.off('trackUnpublished', updateState);
+      participant.off('trackSubscribed', updateState);
+      participant.off('trackUnsubscribed', updateState);
+      participant.off('trackMuted', updateState);
+      participant.off('trackUnmuted', updateState);
+    };
+  }, [participant, isLocal]);
+
+  const mirrorStyle =
+    isLocal && isFrontCamera && !isCamOff
+      ? { transform: 'scaleX(-1)', WebkitTransform: 'scaleX(-1)' }
+      : {};
+
+  return (
+    <div className="participant-tile">
+      {hasVideo && !isCamOff ? (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted={isLocal}
+          style={mirrorStyle}
+        />
+      ) : (
+        <div className="tile-no-video">
+          <div className="tile-avatar">
+            {(participant.identity || '?')[0].toUpperCase()}
+          </div>
+        </div>
+      )}
+      <div className="tile-footer">
+        <span className="tile-name">{participant.identity}</span>
+        <span className="tile-icons">
+          {isMicOff && <span title="Микрофон выкл">🔇</span>}
+          {isCamOff && <span title="Камера выкл">📵</span>}
+        </span>
+      </div>
+    </div>
   );
 }
 
-console.log('TURN USERNAME:', import.meta.env.VITE_TURN_USERNAME);
-console.log(
-  'TURN CREDENTIAL EXISTS:',
-  Boolean(import.meta.env.VITE_TURN_CREDENTIAL)
-);
-
-const rtcConfig = {
-  iceServers,
-};
-
+// --- Main App ---
 export default function App() {
   const [authUser, setAuthUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -62,7 +111,6 @@ export default function App() {
 
   const [roomId, setRoomId] = useState('room-101');
   const [userName, setUserName] = useState('Иван');
-  const [remoteUserName, setRemoteUserName] = useState('Собеседник');
 
   const [joined, setJoined] = useState(false);
   const [status, setStatus] = useState('Готов к подключению');
@@ -81,77 +129,35 @@ export default function App() {
   const [accountTab, setAccountTab] = useState('profile');
 
   const [callHistory] = useState([
-    {
-      id: '1',
-      title: 'Тестовый звонок',
-      roomId: 'room-101',
-      duration: '12 мин 34 сек',
-      date: '08.04.2026',
-    },
-    {
-      id: '2',
-      title: 'Созвон по проекту',
-      roomId: 'room-205',
-      duration: '5 мин 10 сек',
-      date: '07.04.2026',
-    },
+    { id: '1', title: 'Тестовый звонок', roomId: 'room-101', duration: '12 мин 34 сек', date: '08.04.2026' },
+    { id: '2', title: 'Созвон по проекту', roomId: 'room-205', duration: '5 мин 10 сек', date: '07.04.2026' },
   ]);
 
-  const daysSinceRegistration = useMemo(() => {
-    if (!authUser?.createdAt) return null;
-
-    const createdAt = new Date(authUser.createdAt);
-    const now = new Date();
-
-    const diffMs = now - createdAt;
-    return Math.max(1, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
-  }, [authUser]);
-
-  const [participants, setParticipants] = useState([]);
-
-  const [localVideoShape, setLocalVideoShape] = useState('landscape');
-  const [remoteVideoShape, setRemoteVideoShape] = useState('landscape');
-  const [primaryVideo, setPrimaryVideo] = useState('remote');
-  const [isLocalPreviewOpen, setIsLocalPreviewOpen] = useState(false);
-
-  const [remoteMediaState, setRemoteMediaState] = useState({
-    cameraOff: false,
-    micOff: false,
-  });
+  const livekitRoomRef = useRef(null);
+  const [renderTick, setRenderTick] = useState(0);
+  const forceUpdate = useCallback(() => setRenderTick(t => t + 1), []);
 
   const roomIdRef = useRef(roomId);
   const chatBodyRef = useRef(null);
 
-  const localVideoRef = useRef(null);
-  const localPreviewOverlayVideoRef = useRef(null);
-  const remoteVideoRef = useRef(null);
+  useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
 
-  const peerRef = useRef(null);
-  const cameraStreamRef = useRef(null);
-  const screenStreamRef = useRef(null);
+  const daysSinceRegistration = useMemo(() => {
+    if (!authUser?.createdAt) return null;
+    const diffMs = new Date() - new Date(authUser.createdAt);
+    return Math.max(1, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+  }, [authUser]);
 
-  const pendingIceCandidatesRef = useRef([]);
-  const remoteDescriptionSetRef = useRef(false);
-
-  useEffect(() => {
-    roomIdRef.current = roomId;
-  }, [roomId]);
-
+  // Auth
   useEffect(() => {
     async function checkAuth() {
       const token = localStorage.getItem('token');
-
-      if (!token) {
-        setAuthChecked(true);
-        return;
-      }
-
+      if (!token) { setAuthChecked(true); return; }
       try {
         const result = await getMe(token);
         setAuthUser(result.user);
         setUserName(result.user.username || 'Иван');
-        setAuthError('');
-      } catch (error) {
+      } catch {
         localStorage.removeItem('token');
         setAuthUser(null);
         setAuthError('Сессия истекла. Войдите снова.');
@@ -159,804 +165,209 @@ export default function App() {
         setAuthChecked(true);
       }
     }
-
     checkAuth();
   }, []);
 
+  // Chat via Socket.IO
   useEffect(() => {
-    socket.on('room-created', () => {
-      setStatus('Комната создана. Ожидаем второго участника');
-      setRemoteUserName('Собеседник');
-    });
-
-    socket.on('room-joined', ({ remoteUserName }) => {
-      setStatus('Вы вошли в комнату');
-      setRemoteUserName(remoteUserName || 'Собеседник');
-    });
-
-    socket.on('participant-joined', ({ remoteUserName }) => {
-      setRemoteUserName(remoteUserName || 'Собеседник');
-      setStatus(`${remoteUserName || 'Собеседник'} подключился`);
-    });
-
-    socket.on('room-users', (users) => {
-      setParticipants(Array.isArray(users) ? users : []);
-    });
-
-    socket.on('init', async ({ isInitiator }) => {
-      if (isInitiator) {
-        setStatus('Вы инициатор, создаём offer...');
-      await createOffer();
-      } else {
-            setStatus('Ожидаем offer...');
-      }
-    });
-
-    socket.on('offer', async (offer) => {
-      try {
-        console.log('Получен offer');
-        setStatus('Получен запрос на соединение');
-        await handleOffer(offer);
-      } catch (error) {
-        console.error('Ошибка обработки offer:', error);
-        setStatus('Ошибка при обработке offer');
-      }
-    });
-
-    socket.on('answer', async (answer) => {
-      try {
-        console.log('Получен answer');
-        setStatus('Соединение подтверждено');
-
-        if (peerRef.current) {
-          await peerRef.current.setRemoteDescription(answer);
-          remoteDescriptionSetRef.current = true;
-          await flushPendingIceCandidates();
-        }
-      } catch (error) {
-        console.error('Ошибка обработки answer:', error);
-        setStatus('Ошибка при обработке answer');
-      }
-    });
-
-    socket.on('media-state', (mediaState) => {
-      setRemoteMediaState({
-        cameraOff: Boolean(mediaState?.cameraOff),
-        micOff: Boolean(mediaState?.micOff),
-      });
-    });
-
-    socket.on('ice-candidate', async (candidate) => {
-      try {
-        if (!candidate) return;
-
-        console.log('Получен ICE candidate:', candidate.type);
-
-        if (!peerRef.current) {
-          console.log('Peer ещё не создан, кладём ICE candidate в очередь');
-          pendingIceCandidatesRef.current.push(candidate);
-          return;
-        }
-
-        if (!remoteDescriptionSetRef.current) {
-          console.log('Remote description ещё не установлено, кладём ICE candidate в очередь');
-          pendingIceCandidatesRef.current.push(candidate);
-          return;
-        }
-
-        await peerRef.current.addIceCandidate(candidate);
-        console.log('ICE candidate успешно добавлен');
-      } catch (error) {
-        console.error('Ошибка ICE candidate:', error);
-      }
-    });
-
     socket.on('chat-message', (message) => {
-      setMessages((prev) => [...prev, message]);
+      setMessages(prev => [...prev, message]);
     });
-
-    socket.on('room-full', () => {
-      setJoined(false);
-      setStatus('Комната уже занята');
-      setParticipants([]);
-    });
-
-    socket.on('user-disconnected', () => {
-      setStatus('Собеседник отключился');
-      setRemoteUserName('Собеседник');
-      setPrimaryVideo('remote');
-      setIsLocalPreviewOpen(false);
-      setCallStartedAt(null);
-      setCallSeconds(0);
-      setParticipants((prev) => prev.slice(0, 1));
-      
-
-      setRemoteMediaState({
-        cameraOff: false,
-        micOff: false,
-      });
-
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = null;
-      }
-
-      closePeerConnection();
-    });
-
-    return () => {
-      socket.off('room-created');
-      socket.off('room-joined');
-      socket.off('participant-joined');
-      socket.off('room-users');
-      socket.off('init');
-      socket.off('offer');
-      socket.off('answer');
-      socket.off('ice-candidate');
-      socket.off('chat-message');
-      socket.off('room-full');
-      socket.off('user-disconnected');
-      socket.off('media-state');
-
-      stopAllMedia();
-      closePeerConnection();
-    };
+    return () => { socket.off('chat-message'); };
   }, []);
 
+  // Chat scroll
+  useEffect(() => {
+    if (chatBodyRef.current) {
+      chatBodyRef.current.scrollTop = chatBodyRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  // Timer
   useEffect(() => {
     if (!callStartedAt) return;
-
     const timer = setInterval(() => {
-      const diff = Math.floor((Date.now() - callStartedAt) / 1000);
-      setCallSeconds(diff);
+      setCallSeconds(Math.floor((Date.now() - callStartedAt) / 1000));
     }, 1000);
-
     return () => clearInterval(timer);
   }, [callStartedAt]);
 
-  useEffect(() => {
-    updateLocalPreview();
-  }, [isLocalPreviewOpen, isFrontCamera, isSharingScreen]);
-
-  useEffect(() => {
-    if (!chatBodyRef.current) return;
-    chatBodyRef.current.scrollTop = chatBodyRef.current.scrollHeight;
-  }, [messages]);
-
-  useEffect(() => {
-    const localVideo = localVideoRef.current;
-    const remoteVideo = remoteVideoRef.current;
-
-    const updateLocalShape = () => {
-      setLocalVideoShape(detectVideoShape(localVideo));
-    };
-
-    const updateRemoteShape = () => {
-      setRemoteVideoShape(detectVideoShape(remoteVideo));
-    };
-
-    if (localVideo) {
-      localVideo.addEventListener('loadedmetadata', updateLocalShape);
-      localVideo.addEventListener('resize', updateLocalShape);
-    }
-
-    if (remoteVideo) {
-      remoteVideo.addEventListener('loadedmetadata', updateRemoteShape);
-      remoteVideo.addEventListener('resize', updateRemoteShape);
-    }
-
-    return () => {
-      if (localVideo) {
-        localVideo.removeEventListener('loadedmetadata', updateLocalShape);
-        localVideo.removeEventListener('resize', updateLocalShape);
-      }
-
-      if (remoteVideo) {
-        remoteVideo.removeEventListener('loadedmetadata', updateRemoteShape);
-        remoteVideo.removeEventListener('resize', updateRemoteShape);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!joined) return;
-    emitMediaState();
-  }, [joined, isMuted, isCameraOff]);
-
   const formattedCallTime = useMemo(() => {
-    const hours = Math.floor(callSeconds / 3600);
-    const minutes = Math.floor((callSeconds % 3600) / 60);
-    const seconds = callSeconds % 60;
-
-    const hh = String(hours).padStart(2, '0');
-    const mm = String(minutes).padStart(2, '0');
-    const ss = String(seconds).padStart(2, '0');
-
-    return `${hh}:${mm}:${ss}`;
+    const h = Math.floor(callSeconds / 3600);
+    const m = Math.floor((callSeconds % 3600) / 60);
+    const s = callSeconds % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }, [callSeconds]);
 
-  const detectVideoShape = (videoElement) => {
-    if (!videoElement) return 'landscape';
-
-    const { videoWidth, videoHeight } = videoElement;
-
-    if (!videoWidth || !videoHeight) {
-      return 'landscape';
-    }
-
-    return videoHeight > videoWidth ? 'portrait' : 'landscape';
-  };
-
-  const getMediaStatusText = ({ cameraOff, micOff, cameraMissing = false }) => {
-    if (cameraMissing && micOff) return 'Камера недоступна, микрофон выключен';
-    if (cameraMissing) return 'Камера недоступна';
-
-    if (cameraOff && micOff) return 'Пользователь отключил камеру и микрофон';
-    if (cameraOff) return 'Пользователь отключил камеру';
-    if (micOff) return 'Пользователь отключил микрофон';
-
-    return '';
-  };
-
-  const emitMediaState = (overrides = {}) => {
-    if (!joined || !roomIdRef.current) return;
-
-    socket.emit('media-state', {
-      roomId: roomIdRef.current,
-      mediaState: {
-        cameraOff: overrides.cameraOff ?? isCameraOff,
-        micOff: overrides.micOff ?? isMuted,
-      },
-    });
-  };
-
-  const getCurrentVideoTrack = () => {
-    if (screenStreamRef.current) {
-      return screenStreamRef.current.getVideoTracks()[0] || null;
-    }
-
-    if (cameraStreamRef.current) {
-      return cameraStreamRef.current.getVideoTracks()[0] || null;
-    }
-
-    return null;
-  };
-
-  const updateLocalPreview = async () => {
-    const previewStream = screenStreamRef.current || cameraStreamRef.current || null;
-
-    const targets = [localVideoRef.current, localPreviewOverlayVideoRef.current];
-
-    for (const videoElement of targets) {
-      if (!videoElement) continue;
-
-      videoElement.srcObject = previewStream;
-      videoElement.autoplay = true;
-      videoElement.playsInline = true;
-      videoElement.muted = true;
-
-      if (previewStream) {
-        try {
-          await videoElement.play();
-        } catch (playError) {
-          console.warn('video.play() не выполнился сразу:', playError);
-        }
-      }
-    }
-  };
-
-  const getMediaErrorMessage = (error) => {
-    const name = error?.name || 'UnknownError';
-
-    switch (name) {
-      case 'NotAllowedError':
-      case 'PermissionDeniedError':
-        return 'Доступ к камере/микрофону запрещён в браузере';
-      case 'NotFoundError':
-      case 'DevicesNotFoundError':
-        return 'Камера или микрофон не найдены на устройстве';
-      case 'NotReadableError':
-      case 'TrackStartError':
-        return 'Камера или микрофон заняты другим приложением';
-      case 'OverconstrainedError':
-      case 'ConstraintNotSatisfiedError':
-        return 'Текущие параметры камеры не поддерживаются устройством';
-      case 'AbortError':
-        return 'Браузер прервал доступ к камере/микрофону';
-      case 'SecurityError':
-        return 'Браузер заблокировал доступ по соображениям безопасности';
-      default:
-        return `Не удалось получить доступ к камере/микрофону (${name})`;
-    }
-  };
-
-  const attachStreamToVideo = async (videoElement, stream, muted = false) => {
-    if (!videoElement) return;
-
-    videoElement.srcObject = stream;
-    videoElement.autoplay = true;
-    videoElement.playsInline = true;
-    videoElement.muted = muted;
-
-    try {
-      await videoElement.play();
-    } catch (playError) {
-      console.warn('video.play() не выполнился сразу:', playError);
-    }
-  };
-
-  const startCameraMedia = async (forceRestart = false) => {
-    if (cameraStreamRef.current && !forceRestart) {
-      return cameraStreamRef.current;
-    }
-
-    if (forceRestart && cameraStreamRef.current) {
-      cameraStreamRef.current.getTracks().forEach((track) => track.stop());
-      cameraStreamRef.current = null;
-    }
-
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setStatus('Этот браузер не поддерживает доступ к камере через MediaDevices API');
-      return null;
-    }
-
-    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-
-    const preferredFacingMode = isMobile
-      ? { ideal: isFrontCamera ? 'user' : 'environment' }
-      : 'user';
-
-    const preferredConstraints = {
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-      video: {
-        facingMode: preferredFacingMode,
-        width: { ideal: 640, max: 640 },
-        height: { ideal: 360, max: 360 },
-        frameRate: { ideal: 15, max: 15 },
-      },
-    };
-
-    const relaxedConstraints = {
-      audio: true,
-      video: true,
-    };
-
-    const audioOnlyConstraints = {
-      audio: true,
-      video: false,
-    };
-
-    try {
-      let stream;
-
-      try {
-        stream = await navigator.mediaDevices.getUserMedia(preferredConstraints);
-      } catch (firstError) {
-        console.warn('preferredConstraints не сработали, пробуем relaxedConstraints', firstError);
-        stream = await navigator.mediaDevices.getUserMedia(relaxedConstraints);
-      }
-
-      cameraStreamRef.current = stream;
-
-      stream.getAudioTracks().forEach((track) => {
-        track.enabled = !isMuted;
-      });
-
-      stream.getVideoTracks().forEach((track) => {
-        track.enabled = !isCameraOff;
-      });
-
-      if (localVideoRef.current) {
-        await attachStreamToVideo(localVideoRef.current, stream, true);
-      } else {
-        updateLocalPreview();
-      }
-
-      setStatus('Камера и микрофон подключены');
-      return stream;
-    } catch (error) {
-      console.error('getUserMedia error:', error);
-
-      // Последний фолбэк: хотя бы микрофон
-      try {
-        const audioOnlyStream = await navigator.mediaDevices.getUserMedia(audioOnlyConstraints);
-
-        cameraStreamRef.current = audioOnlyStream;
-
-        audioOnlyStream.getAudioTracks().forEach((track) => {
-          track.enabled = !isMuted;
-        });
-
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = null;
-        }
-
-        setStatus('Камера недоступна, но микрофон подключён');
-        return audioOnlyStream;
-      } catch (audioOnlyError) {
-        console.error('audioOnly fallback error:', audioOnlyError);
-        setStatus(getMediaErrorMessage(error));
-        return null;
-      }
-    }
-  };
-
-  const createPeerConnection = async () => {
-    if (peerRef.current) return peerRef.current;
-
-    const peer = new RTCPeerConnection(rtcConfig);
-
-    peer.onicecandidate = (event) => {
-      if (event.candidate) {
-        console.log('Отправляем ICE candidate:', event.candidate.type);
-
-        socket.emit('ice-candidate', {
-          roomId: roomIdRef.current,
-          candidate: event.candidate,
-        });
-      } else {
-        console.log('ICE gathering completed');
-      }
-    };
-
-    peer.ontrack = (event) => {
-      const [remoteStream] = event.streams;
-      console.log('Получен remote track');
-
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStream;
-      }
-
-      setStatus('Звонок активен');
-    };
-
-    peer.onconnectionstatechange = () => {
-      const state = peer.connectionState;
-      console.log('connectionState:', state);
-
-      if (state === 'connected') {
-        setStatus('Соединение установлено');
-        setCallStartedAt((prev) => prev || Date.now());
-      } else if (state === 'connecting') {
-        setStatus('Подключение...');
-      } else if (state === 'disconnected') {
-        setStatus('Соединение потеряно');
-      } else if (state === 'failed') {
-        setStatus('Ошибка соединения');
-      } else if (state === 'closed') {
-        setStatus('Соединение закрыто');
-      }
-    };
-
-    peer.oniceconnectionstatechange = () => {
-      console.log('iceConnectionState:', peer.iceConnectionState);
-    };
-
-    peer.onicegatheringstatechange = () => {
-      console.log('iceGatheringState:', peer.iceGatheringState);
-    };
-
-    peer.onsignalingstatechange = () => {
-      console.log('signalingState:', peer.signalingState);
-    };
-
-    const stream = await startCameraMedia();
-
-    if (stream) {
-      stream.getAudioTracks().forEach((track) => {
-        peer.addTrack(track, stream);
-      });
-
-      const videoTrack =
-      screenStreamRef.current?.getVideoTracks()[0] ||
-      stream.getVideoTracks()[0];
-
-      if (videoTrack) {
-        const videoSourceStream = screenStreamRef.current || stream;
-
-        const sender = peer.addTrack(videoTrack, videoSourceStream);
-
-        const params = sender.getParameters();
-
-        if (!params.encodings) {
-          params.encodings = [{}];
-        }
-
-        params.encodings[0].maxBitrate = 400_000; // 400 kbps
-        params.encodings[0].maxFramerate = 15;
-
-        sender.setParameters(params).catch(console.error);
-      }
-
-    } else {
-      console.warn('Peer создан без локального media stream');
-    }
-
-    peerRef.current = peer;
-    return peer;
-  };
-
-  const flushPendingIceCandidates = async () => {
-    if (!peerRef.current || !remoteDescriptionSetRef.current) return;
-
-    while (pendingIceCandidatesRef.current.length > 0) {
-      const candidate = pendingIceCandidatesRef.current.shift();
-
-      try {
-        await peerRef.current.addIceCandidate(candidate);
-        console.log('Отложенный ICE candidate успешно добавлен');
-      } catch (error) {
-        console.error('Ошибка при добавлении отложенного ICE candidate:', error);
-      }
-    }
-  };
-
-  const createOffer = async () => {
-    const peer = await createPeerConnection();
-
-    const offer = await peer.createOffer();
-    await peer.setLocalDescription(offer);
-
-    console.log('Создан и отправлен offer');
-
-    socket.emit('offer', {
-      roomId: roomIdRef.current,
-      offer,
-    });
-  };
-
-  const handleOffer = async (offer) => {
-    const peer = await createPeerConnection();
-
-    await peer.setRemoteDescription(offer);
-    remoteDescriptionSetRef.current = true;
-    await flushPendingIceCandidates();
-
-    const answer = await peer.createAnswer();
-    await peer.setLocalDescription(answer);
-
-    socket.emit('answer', {
-      roomId: roomIdRef.current,
-      answer,
-    });
-  };
+  // Participants derived from LiveKit room
+  const allParticipants = useMemo(() => {
+    const room = livekitRoomRef.current;
+    if (!room || !joined) return [];
+    return [room.localParticipant, ...Array.from(room.remoteParticipants.values())];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joined, renderTick]);
 
   const joinRoom = async () => {
-    if (!roomId.trim()) {
-      setStatus('Введите ID комнаты');
-      return;
-    }
-
-    if (!userName.trim()) {
-      setStatus('Введите имя');
-      return;
-    }
-
-    if (joined) return;
-
-    setStatus('Проверяем доступ к камере и микрофону...');
-
-    await logPermissionState();
-    const mediaStream = await startCameraMedia();
-
-    if (!mediaStream) {
-      setStatus('Сначала разрешите доступ к камере/микрофону, затем войдите в комнату');
-      return;
-    }
-
-    socket.emit('join-room', {
-      roomId: roomId.trim(),
-      userName: userName.trim(),
-    });
-
-    setJoined(true);
-    setStatus('Подключаемся к комнате...');
-  };
-
-  const replaceOutgoingVideoTrack = async (newTrack) => {
-    if (!peerRef.current) return;
-
-    const sender = peerRef.current
-      .getSenders()
-      .find((s) => s.track && s.track.kind === 'video');
-
-    if (sender) {
-      await sender.replaceTrack(newTrack);
-    }
-  };
-
-  const logPermissionState = async () => {
-    if (!navigator.permissions?.query) return;
+    if (!roomId.trim() || !userName.trim() || joined) return;
+    setStatus('Получаем токен...');
 
     try {
-      const cameraPermission = await navigator.permissions.query({ name: 'camera' });
-      console.log('camera permission:', cameraPermission.state);
-    } catch (e) {
-      console.warn('Не удалось проверить camera permission', e);
-    }
+      const authToken = localStorage.getItem('token');
+      const resp = await fetch(`${SERVER_URL}/rooms/token`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ roomId: roomId.trim() }),
+      });
 
-    try {
-      const micPermission = await navigator.permissions.query({ name: 'microphone' });
-      console.log('microphone permission:', micPermission.state);
-    } catch (e) {
-      console.warn('Не удалось проверить microphone permission', e);
+      if (!resp.ok) {
+        const err = await resp.json();
+        setStatus(`Ошибка: ${err.message}`);
+        return;
+      }
+
+      const { token: lkToken, wsUrl } = await resp.json();
+
+      const room = new Room({ adaptiveStream: true, dynacast: true });
+      livekitRoomRef.current = room;
+
+      room.on(RoomEvent.Connected, () => {
+        setJoined(true);
+        setCallStartedAt(Date.now());
+        setStatus('Подключено');
+        forceUpdate();
+      });
+
+      room.on(RoomEvent.Disconnected, () => {
+        setJoined(false);
+        setCallStartedAt(null);
+        setCallSeconds(0);
+        livekitRoomRef.current = null;
+        setStatus('Отключено');
+        forceUpdate();
+      });
+
+      room.on(RoomEvent.ParticipantConnected, (p) => {
+        setStatus(`${p.identity} подключился`);
+        forceUpdate();
+      });
+
+      room.on(RoomEvent.ParticipantDisconnected, (p) => {
+        setStatus(`${p.identity} отключился`);
+        forceUpdate();
+      });
+
+      room.on(RoomEvent.TrackSubscribed, forceUpdate);
+      room.on(RoomEvent.TrackUnsubscribed, forceUpdate);
+      room.on(RoomEvent.LocalTrackPublished, forceUpdate);
+      room.on(RoomEvent.LocalTrackUnpublished, forceUpdate);
+      room.on(RoomEvent.TrackMuted, forceUpdate);
+      room.on(RoomEvent.TrackUnmuted, forceUpdate);
+
+      setStatus('Подключаемся...');
+      await room.connect(wsUrl, lkToken);
+
+      setStatus('Включаем камеру...');
+      await room.localParticipant.enableCameraAndMicrophone();
+      forceUpdate();
+
+      socket.emit('join-room', { roomId: roomId.trim(), userName: userName.trim() });
+
+    } catch (error) {
+      console.error('joinRoom error:', error);
+      setStatus(`Ошибка: ${error.message}`);
+      livekitRoomRef.current = null;
     }
   };
 
-  const toggleMute = () => {
-    if (!cameraStreamRef.current) return;
-
-    const nextMuted = !isMuted;
-
-    cameraStreamRef.current.getAudioTracks().forEach((track) => {
-      track.enabled = !nextMuted;
-    });
-
-    setIsMuted(nextMuted);
-    emitMediaState({ micOff: nextMuted });
-    setStatus(nextMuted ? 'Микрофон выключен' : 'Микрофон включён');
+  const leaveCall = async () => {
+    if (livekitRoomRef.current) {
+      await livekitRoomRef.current.disconnect();
+      livekitRoomRef.current = null;
+    }
+    socket.emit('leave-room', roomIdRef.current);
+    setJoined(false);
+    setIsMuted(false);
+    setIsCameraOff(false);
+    setIsSharingScreen(false);
+    setStatus('Вы вышли из комнаты');
+    setCallStartedAt(null);
+    setCallSeconds(0);
+    setMessages([]);
+    setIsFrontCamera(true);
+    forceUpdate();
   };
 
-  const toggleCamera = () => {
-    const currentVideoTrack = getCurrentVideoTrack();
-    const nextCameraOff = !isCameraOff;
+  const toggleMute = async () => {
+    const room = livekitRoomRef.current;
+    if (!room || !joined) return;
+    const next = !isMuted;
+    await room.localParticipant.setMicrophoneEnabled(!next);
+    setIsMuted(next);
+    setStatus(next ? 'Микрофон выключен' : 'Микрофон включён');
+    forceUpdate();
+  };
 
-    if (currentVideoTrack) {
-      currentVideoTrack.enabled = !nextCameraOff;
-    }
-
-    setIsCameraOff(nextCameraOff);
-    emitMediaState({ cameraOff: nextCameraOff });
-    setStatus(nextCameraOff ? 'Видео выключено' : 'Видео включено');
+  const toggleCamera = async () => {
+    const room = livekitRoomRef.current;
+    if (!room || !joined) return;
+    const next = !isCameraOff;
+    await room.localParticipant.setCameraEnabled(!next);
+    setIsCameraOff(next);
+    setStatus(next ? 'Камера выключена' : 'Камера включена');
+    forceUpdate();
   };
 
   const switchCamera = async () => {
     const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-
-    if (!isMobile) {
-      setStatus('Переключение камеры доступно только на мобильных устройствах');
-      return;
-    }
-
-    if (isSharingScreen) {
-      setStatus('Сначала остановите демонстрацию экрана');
-      return;
-    }
+    if (!isMobile) { setStatus('Переключение камеры доступно только на мобильных'); return; }
+    if (isSharingScreen) { setStatus('Сначала остановите демонстрацию экрана'); return; }
 
     try {
-      const nextIsFrontCamera = !isFrontCamera;
-
-      if (cameraStreamRef.current) {
-        cameraStreamRef.current.getTracks().forEach((track) => track.stop());
-        cameraStreamRef.current = null;
-      }
-
-      setIsFrontCamera(nextIsFrontCamera);
-
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: {
-          facingMode: { ideal: nextIsFrontCamera ? 'user' : 'environment' },
-          width: { ideal: 640, max: 640 },
-          height: { ideal: 360, max: 360 },
-          frameRate: { ideal: 15, max: 15 },
-        },
+      const room = livekitRoomRef.current;
+      if (!room) return;
+      const nextFront = !isFrontCamera;
+      setIsFrontCamera(nextFront);
+      await room.localParticipant.setCameraEnabled(false);
+      await room.localParticipant.setCameraEnabled(true, {
+        facingMode: nextFront ? 'user' : 'environment',
       });
-
-      cameraStreamRef.current = newStream;
-
-      newStream.getAudioTracks().forEach((track) => {
-        track.enabled = !isMuted;
-      });
-
-      newStream.getVideoTracks().forEach((track) => {
-        track.enabled = !isCameraOff;
-      });
-
-      updateLocalPreview();
-
-      if (peerRef.current) {
-        const audioTrack = newStream.getAudioTracks()[0];
-        const videoTrack = newStream.getVideoTracks()[0];
-
-        const audioSender = peerRef.current
-          .getSenders()
-          .find((sender) => sender.track && sender.track.kind === 'audio');
-
-        const videoSender = peerRef.current
-          .getSenders()
-          .find((sender) => sender.track && sender.track.kind === 'video');
-
-        if (audioSender && audioTrack) {
-          await audioSender.replaceTrack(audioTrack);
-        }
-
-        if (videoSender && videoTrack) {
-          await videoSender.replaceTrack(videoTrack);
-        }
-      }
-
-      setStatus(
-        nextIsFrontCamera
-          ? 'Переключено на фронтальную камеру'
-          : 'Переключено на основную камеру'
-      );
+      setStatus(nextFront ? 'Фронтальная камера' : 'Основная камера');
+      forceUpdate();
     } catch (error) {
       console.error('switchCamera error:', error);
       setStatus('Не удалось переключить камеру');
     }
   };
 
-
   const startScreenShare = async () => {
+    const room = livekitRoomRef.current;
+    if (!room || !joined) return;
+
     if (isSharingScreen) {
-      await stopScreenShare();
-      return;
+      await room.localParticipant.setScreenShareEnabled(false);
+      setIsSharingScreen(false);
+      setStatus('Демонстрация экрана выключена');
+    } else {
+      try {
+        await room.localParticipant.setScreenShareEnabled(true);
+        setIsSharingScreen(true);
+        setStatus('Демонстрация экрана включена');
+      } catch {
+        setStatus('Не удалось начать демонстрацию экрана');
+      }
     }
-
-    try {
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: false,
-      });
-
-      const screenTrack = displayStream.getVideoTracks()[0];
-      if (!screenTrack) return;
-
-      screenTrack.enabled = !isCameraOff;
-
-      screenTrack.onended = async () => {
-        await stopScreenShare();
-      };
-
-      screenStreamRef.current = displayStream;
-      updateLocalPreview();
-      await replaceOutgoingVideoTrack(screenTrack);
-
-      setIsSharingScreen(true);
-      setStatus('Демонстрация экрана включена');
-    } catch (error) {
-      console.error(error);
-      setStatus('Не удалось начать демонстрацию экрана');
-    }
-  };
-
-  const stopScreenShare = async () => {
-    if (!screenStreamRef.current) return;
-
-    screenStreamRef.current.getTracks().forEach((track) => track.stop());
-    screenStreamRef.current = null;
-
-    const cameraTrack = cameraStreamRef.current?.getVideoTracks()[0];
-
-    if (cameraTrack) {
-      cameraTrack.enabled = !isCameraOff;
-      await replaceOutgoingVideoTrack(cameraTrack);
-    }
-
-    updateLocalPreview();
-    setIsSharingScreen(false);
-    setStatus('Демонстрация экрана выключена');
+    forceUpdate();
   };
 
   const copyRoomId = async () => {
     try {
       await navigator.clipboard.writeText(roomId);
       setCopied(true);
-      setStatus('ID комнаты скопирован');
-
-      setTimeout(() => {
-        setCopied(false);
-      }, 1500);
-    } catch (error) {
-      console.error(error);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
       setStatus('Не удалось скопировать ID комнаты');
     }
   };
@@ -964,126 +375,22 @@ export default function App() {
   const sendMessage = () => {
     const text = messageText.trim();
     if (!text || !joined) return;
-
     socket.emit('chat-message', {
       roomId: roomIdRef.current,
       userName: userName.trim() || 'Участник',
       text,
-      timestamp: new Date().toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     });
-
     setMessageText('');
   };
 
-  const handleMessageKeyDown = (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      sendMessage();
-    }
+  const handleMessageKeyDown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); sendMessage(); }
   };
 
-  const toggleLocalPreviewOverlay = () => {
-    setIsLocalPreviewOpen((prev) => !prev);
-  };
+  const gridCols = getGridCols(Math.max(allParticipants.length, 1));
 
-  const closePeerConnection = () => {
-    if (peerRef.current) {
-      peerRef.current.ontrack = null;
-      peerRef.current.onicecandidate = null;
-      peerRef.current.onconnectionstatechange = null;
-      peerRef.current.oniceconnectionstatechange = null;
-      peerRef.current.onicegatheringstatechange = null;
-      peerRef.current.onsignalingstatechange = null;
-      peerRef.current.close();
-      peerRef.current = null;
-    }
-
-    pendingIceCandidatesRef.current = [];
-    remoteDescriptionSetRef.current = false;
-  };
-
-  const stopAllMedia = () => {
-    if (cameraStreamRef.current) {
-      cameraStreamRef.current.getTracks().forEach((track) => track.stop());
-      cameraStreamRef.current = null;
-    }
-
-    if (screenStreamRef.current) {
-      screenStreamRef.current.getTracks().forEach((track) => track.stop());
-      screenStreamRef.current = null;
-    }
-
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = null;
-    }
-
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = null;
-    }
-  };
-
-  const leaveCall = async () => {
-    if (isSharingScreen) {
-      await stopScreenShare();
-    }
-
-    socket.emit('leave-room', roomIdRef.current);
-
-    closePeerConnection();
-    stopAllMedia();
-
-    setJoined(false);
-    setIsMuted(false);
-    setIsCameraOff(false);
-    setIsSharingScreen(false);
-    setPrimaryVideo('remote');
-    setIsLocalPreviewOpen(false);
-    setRemoteUserName('Собеседник');
-    setStatus('Вы вышли из комнаты');
-    setCallStartedAt(null);
-    setCallSeconds(0);
-    setMessages([]);
-    setParticipants([]);
-    setRemoteMediaState({
-      cameraOff: false,
-      micOff: false,
-    });
-    setIsFrontCamera(true);
-  };
-
-  const localVideoTrack = getCurrentVideoTrack();
-  const hasLocalVideoTrack = Boolean(localVideoTrack);
-
-  const localStatusText = getMediaStatusText({
-    cameraOff: isCameraOff,
-    micOff: isMuted,
-    cameraMissing: false,
-  });
-
-  const remoteStatusText = getMediaStatusText({
-    cameraOff: remoteMediaState.cameraOff,
-    micOff: remoteMediaState.micOff,
-  });
-
-  const localVideoMirrorStyle = {
-    transform: isFrontCamera ? 'scaleX(-1)' : 'none',
-    WebkitTransform: isFrontCamera ? 'scaleX(-1)' : 'none',
-  };
-
-  const primaryPanelClass = `video-panel video-card primary-video remote-panel ${remoteVideoShape} ${
-    remoteStatusText ? 'camera-off' : ''
-  }`;
-
-  const pictureInPictureClass = `video-panel video-card pip-video local-panel ${localVideoShape} ${
-    localStatusText ? 'camera-off' : ''
-  }`;
-
-  if (!authChecked) {
-    return <div className="auth-page">Проверяем авторизацию...</div>;
-  }
+  if (!authChecked) return <div className="auth-page">Проверяем авторизацию...</div>;
 
   if (!authUser) {
     return (
@@ -1105,35 +412,21 @@ export default function App() {
           <div className="brand">VoyageCommunications</div>
           <div className="subtitle">blockchainconcept corporations</div>
         </div>
-
         <div className="topbar-right">
           <div className="timer-badge">Время звонка: {formattedCallTime}</div>
           <div className="status-badge">{status}</div>
-
-          <button
-            className="ghost-btn account-toggle-btn"
-            onClick={() => setIsAccountPanelOpen((prev) => !prev)}
-          >
+          <button className="ghost-btn account-toggle-btn" onClick={() => setIsAccountPanelOpen(p => !p)}>
             ☰ Аккаунт
           </button>
-
-          <button
-            className="ghost-btn"
-            onClick={() => {
-              localStorage.removeItem('token');
-              setAuthUser(null);
-              setJoined(false);
-              setMessages([]);
-              setParticipants([]);
-              setStatus('Вы вышли из аккаунта');
-              stopAllMedia();
-              closePeerConnection();
-            }}
-          >
+          <button className="ghost-btn" onClick={() => {
+            localStorage.removeItem('token');
+            setAuthUser(null);
+            if (joined) leaveCall();
+            setStatus('Вы вышли из аккаунта');
+          }}>
             Выйти
           </button>
         </div>
-        
       </div>
 
       {isAccountPanelOpen && (
@@ -1143,144 +436,50 @@ export default function App() {
               <div className="brand">voyage account</div>
               <div className="subtitle">Профиль и история активности</div>
             </div>
-
-            <button
-              className="ghost-btn"
-              onClick={() => setIsAccountPanelOpen(false)}
-            >
-              Закрыть
-            </button>
+            <button className="ghost-btn" onClick={() => setIsAccountPanelOpen(false)}>Закрыть</button>
           </div>
-
           <div className="account-tabs">
-            <button
-              className={accountTab === 'profile' ? 'primary-btn' : 'ghost-btn'}
-              onClick={() => setAccountTab('profile')}
-            >
-              Профиль
-            </button>
-
-            <button
-              className={accountTab === 'calls' ? 'primary-btn' : 'ghost-btn'}
-              onClick={() => setAccountTab('calls')}
-            >
-              История звонков
-            </button>
-
-            <button
-              className={accountTab === 'details' ? 'primary-btn' : 'ghost-btn'}
-              onClick={() => setAccountTab('details')}
-            >
-              Ещё
-            </button>
+            <button className={accountTab === 'profile' ? 'primary-btn' : 'ghost-btn'} onClick={() => setAccountTab('profile')}>Профиль</button>
+            <button className={accountTab === 'calls' ? 'primary-btn' : 'ghost-btn'} onClick={() => setAccountTab('calls')}>История звонков</button>
+            <button className={accountTab === 'details' ? 'primary-btn' : 'ghost-btn'} onClick={() => setAccountTab('details')}>Ещё</button>
           </div>
 
           {accountTab === 'profile' && (
             <div className="account-section">
               <div className="account-info-card">
-                <div className="account-info-row">
-                  <span>Никнейм</span>
-                  <strong>{authUser?.username || '—'}</strong>
-                </div>
-
-                <div className="account-info-row">
-                  <span>ID аккаунта</span>
-                  <strong>{authUser?.id || '—'}</strong>
-                </div>
-
-                <div className="account-info-row">
-                  <span>Дата регистрации</span>
-                  <strong>
-                    {authUser?.createdAt
-                      ? new Date(authUser.createdAt).toLocaleDateString('ru-RU')
-                      : 'Пока недоступно'}
-                  </strong>
-                </div>
-
-                <div className="account-info-row">
-                  <span>С Voyage</span>
-                  <strong>
-                    {daysSinceRegistration ? `${daysSinceRegistration} дн.` : 'Пока недоступно'}
-                  </strong>
-                </div>
+                <div className="account-info-row"><span>Никнейм</span><strong>{authUser?.username || '—'}</strong></div>
+                <div className="account-info-row"><span>ID аккаунта</span><strong>{authUser?.id || '—'}</strong></div>
+                <div className="account-info-row"><span>Дата регистрации</span><strong>{authUser?.createdAt ? new Date(authUser.createdAt).toLocaleDateString('ru-RU') : 'Пока недоступно'}</strong></div>
+                <div className="account-info-row"><span>С Voyage</span><strong>{daysSinceRegistration ? `${daysSinceRegistration} дн.` : 'Пока недоступно'}</strong></div>
               </div>
             </div>
           )}
-
           {accountTab === 'calls' && (
             <div className="account-section">
               <div className="calls-history-list">
                 {callHistory.length === 0 ? (
                   <div className="participants-empty">История звонков пока пуста</div>
-                ) : (
-                  callHistory.map((call) => (
-                    <div className="call-history-card" key={call.id}>
-                      <div className="call-history-title">{call.title}</div>
-                      <div className="call-history-meta">Комната: {call.roomId}</div>
-                      <div className="call-history-meta">Длительность: {call.duration}</div>
-                      <div className="call-history-meta">Дата: {call.date}</div>
-                    </div>
-                  ))
-                )}
+                ) : callHistory.map(call => (
+                  <div className="call-history-card" key={call.id}>
+                    <div className="call-history-title">{call.title}</div>
+                    <div className="call-history-meta">Комната: {call.roomId}</div>
+                    <div className="call-history-meta">Длительность: {call.duration}</div>
+                    <div className="call-history-meta">Дата: {call.date}</div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
-
           {accountTab === 'details' && (
             <div className="account-section">
               <div className="account-info-card">
-                <div className="account-info-row">
-                  <span>Статус</span>
-                  <strong>Активный пользователь</strong>
-                </div>
-
-                <div className="account-info-row">
-                  <span>Продукт</span>
-                  <strong>VoyageCommunications</strong>
-                </div>
-
-                <div className="account-info-row">
-                  <span>Текущий этап</span>
-                  <strong>MVP / WebRTC + Auth</strong>
-                </div>
+                <div className="account-info-row"><span>Статус</span><strong>Активный пользователь</strong></div>
+                <div className="account-info-row"><span>Продукт</span><strong>VoyageCommunications</strong></div>
+                <div className="account-info-row"><span>Текущий этап</span><strong>MVP / LiveKit SFU</strong></div>
               </div>
             </div>
           )}
         </aside>
-      )}
-
-      {isLocalPreviewOpen && (
-        <div className="local-preview-overlay" onClick={toggleLocalPreviewOverlay}>
-          <div
-            className="local-preview-modal"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <button
-              type="button"
-              className="local-preview-close"
-              onClick={toggleLocalPreviewOverlay}
-            >
-              Закрыть
-            </button>
-
-            {!isCameraOff && (
-              <video
-                ref={localPreviewOverlayVideoRef}
-                autoPlay
-                playsInline
-                muted
-                className="local-preview-video local-video-feed"
-                style={localVideoMirrorStyle}
-              />
-            )}
-
-            {localStatusText && (
-              <div className="video-overlay">
-                <div className="video-overlay-text">{localStatusText}</div>
-              </div>
-            )}
-          </div>
-        </div>
       )}
 
       <div className="setup-card">
@@ -1288,32 +487,28 @@ export default function App() {
           <label>Ваше имя</label>
           <input
             value={userName}
-            onChange={(e) => setUserName(e.target.value)}
+            onChange={e => setUserName(e.target.value)}
             placeholder="Введите имя"
+            disabled={joined}
           />
         </div>
 
         <div className="participants-card">
           <div className="participants-header">
             <span>Участники комнаты</span>
-            <span>{participants.length}/2</span>
+            <span>{allParticipants.length}</span>
           </div>
-
           <div className="participants-list">
-            {participants.length === 0 ? (
+            {allParticipants.length === 0 ? (
               <div className="participants-empty">Пока никого нет</div>
-            ) : (
-              participants.map((participant) => (
-                <div className="participant-item" key={participant.socketId}>
-                  <span className="participant-name">
-                    {participant.userName || 'Участник'}
-                  </span>
-                  <span className="participant-badge">
-                    {(participant.userName || '').trim() === userName.trim() ? 'Вы' : 'В комнате'}
-                  </span>
-                </div>
-              ))
-            )}
+            ) : allParticipants.map(p => (
+              <div className="participant-item" key={p.identity}>
+                <span className="participant-name">{p.identity}</span>
+                <span className="participant-badge">
+                  {p === livekitRoomRef.current?.localParticipant ? 'Вы' : 'В комнате'}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -1321,8 +516,9 @@ export default function App() {
           <label>ID комнаты</label>
           <input
             value={roomId}
-            onChange={(e) => setRoomId(e.target.value)}
+            onChange={e => setRoomId(e.target.value)}
             placeholder="Введите ID комнаты"
+            disabled={joined}
           />
         </div>
 
@@ -1330,7 +526,6 @@ export default function App() {
           <button className="primary-btn" onClick={joinRoom} disabled={joined}>
             {joined ? 'Вы в комнате' : 'Войти в комнату'}
           </button>
-
           <button className="ghost-btn" onClick={copyRoomId}>
             {copied ? 'Скопировано' : 'Копировать ID'}
           </button>
@@ -1340,75 +535,42 @@ export default function App() {
       <div className="main-layout">
         <div className="call-section">
           <div className="video-stage">
-            <div className={primaryPanelClass}>
-              {!remoteMediaState.cameraOff && (
-                <video ref={remoteVideoRef} autoPlay playsInline />
-              )}
-
-              {remoteStatusText && (
-                <div className="video-overlay">
-                  <div className="video-overlay-text">{remoteStatusText}</div>
+            {allParticipants.length === 0 ? (
+              <div className="video-empty">
+                <div className="video-empty-text">
+                  {joined ? 'Ожидаем участников...' : 'Войдите в комнату для начала звонка'}
                 </div>
-              )}
-            </div>
-
-            <button
-              type="button"
-              className={pictureInPictureClass}
-              onClick={toggleLocalPreviewOverlay}
-            >
-              {!isCameraOff && (
-                <video
-                  ref={localVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="local-video-feed"
-                  style={localVideoMirrorStyle}
-                />
-              )}
-
-              {localStatusText && (
-                <div className="video-overlay">
-                  <div className="video-overlay-text">{localStatusText}</div>
-                </div>
-              )}
-            </button>
+              </div>
+            ) : (
+              <div
+                className="video-grid"
+                style={{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }}
+              >
+                {allParticipants.map(p => (
+                  <ParticipantTile
+                    key={p.identity}
+                    participant={p}
+                    isLocal={p === livekitRoomRef.current?.localParticipant}
+                    isFrontCamera={isFrontCamera}
+                  />
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="controls-bar">
-            <button
-              className={`control-btn ${isMuted ? 'danger' : ''}`}
-              onClick={toggleMute}
-              disabled={!joined}
-            >
+            <button className={`control-btn ${isMuted ? 'danger' : ''}`} onClick={toggleMute} disabled={!joined}>
               {isMuted ? 'Включить микрофон' : 'Выключить микрофон'}
             </button>
-
-            <button
-              className={`control-btn ${isCameraOff ? 'danger' : ''}`}
-              onClick={toggleCamera}
-              disabled={!joined}
-            >
+            <button className={`control-btn ${isCameraOff ? 'danger' : ''}`} onClick={toggleCamera} disabled={!joined}>
               {isCameraOff ? 'Включить камеру' : 'Выключить камеру'}
             </button>
-
-            <button
-              className="control-btn"
-              onClick={switchCamera}
-              disabled={!joined || isSharingScreen}
-            >
+            <button className="control-btn" onClick={switchCamera} disabled={!joined || isSharingScreen}>
               {isFrontCamera ? 'Задняя камера' : 'Фронтальная камера'}
             </button>
-
-            <button
-              className={`control-btn ${isSharingScreen ? 'active' : ''}`}
-              onClick={startScreenShare}
-              disabled={!joined}
-            >
+            <button className={`control-btn ${isSharingScreen ? 'active' : ''}`} onClick={startScreenShare} disabled={!joined}>
               {isSharingScreen ? 'Остановить экран' : 'Демонстрация экрана'}
             </button>
-
             <button className="control-btn danger" onClick={leaveCall} disabled={!joined}>
               Завершить звонок
             </button>
@@ -1420,44 +582,29 @@ export default function App() {
             <div className="chat-title">Чат комнаты</div>
             <div className="chat-room">{roomId}</div>
           </div>
-
           <div className="chat-body" ref={chatBodyRef}>
             {messages.length === 0 ? (
-              <div className="chat-empty">
-                Сообщений пока нет. Напишите первое сообщение.
-              </div>
-            ) : (
-              messages.map((message, index) => {
-                const isOwn = message.userName === userName;
-
-                return (
-                  <div
-                    key={`${message.timestamp}-${index}`}
-                    className={`message-item ${isOwn ? 'own' : ''}`}
-                  >
-                    <div className="message-meta">
-                      <span>{message.userName}</span>
-                      <span>{message.timestamp}</span>
-                    </div>
-                    <div className="message-bubble">{message.text}</div>
-                  </div>
-                );
-              })
-            )}
+              <div className="chat-empty">Сообщений пока нет. Напишите первое сообщение.</div>
+            ) : messages.map((msg, i) => {
+              const isOwn = msg.userName === userName;
+              return (
+                <div key={`${msg.timestamp}-${i}`} className={`message-item ${isOwn ? 'own' : ''}`}>
+                  <div className="message-meta"><span>{msg.userName}</span><span>{msg.timestamp}</span></div>
+                  <div className="message-bubble">{msg.text}</div>
+                </div>
+              );
+            })}
           </div>
-
           <div className="chat-input-row">
             <input
               className="chat-input"
               value={messageText}
-              onChange={(e) => setMessageText(e.target.value)}
+              onChange={e => setMessageText(e.target.value)}
               onKeyDown={handleMessageKeyDown}
               placeholder="Введите сообщение"
               disabled={!joined}
             />
-            <button className="send-btn" onClick={sendMessage} disabled={!joined}>
-              Отправить
-            </button>
+            <button className="send-btn" onClick={sendMessage} disabled={!joined}>Отправить</button>
           </div>
         </aside>
       </div>
