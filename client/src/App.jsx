@@ -20,6 +20,7 @@ function getGridCols(n) {
 // --- Single participant tile ---
 function ParticipantTile({ participant, isLocal, isFrontCamera }) {
   const videoRef = useRef(null);
+  const audioRef = useRef(null);
   const [hasVideo, setHasVideo] = useState(false);
   const [isMicOff, setIsMicOff] = useState(false);
   const [isCamOff, setIsCamOff] = useState(false);
@@ -58,26 +59,36 @@ function ParticipantTile({ participant, isLocal, isFrontCamera }) {
       }
     };
 
-    updateState();
+    // Attach remote audio (local audio muted to avoid echo)
+    const attachAudio = () => {
+      if (isLocal) return;
+      const audioPub = participant.getTrackPublication(Track.Source.Microphone);
+      if (audioPub?.track && audioPub.isSubscribed && audioRef.current) {
+        audioPub.track.attach(audioRef.current);
+      }
+    };
 
-    // localTrackPublished/Unpublished — для локального участника
-    // trackPublished/Subscribed — для удалённых участников
-    participant.on('trackPublished', updateState);
-    participant.on('trackUnpublished', updateState);
-    participant.on('localTrackPublished', updateState);
-    participant.on('localTrackUnpublished', updateState);
-    participant.on('trackSubscribed', updateState);
-    participant.on('trackUnsubscribed', updateState);
+    updateState();
+    attachAudio();
+
+    const handleAll = () => { updateState(); attachAudio(); };
+
+    participant.on('trackPublished', handleAll);
+    participant.on('trackUnpublished', handleAll);
+    participant.on('localTrackPublished', handleAll);
+    participant.on('localTrackUnpublished', handleAll);
+    participant.on('trackSubscribed', handleAll);
+    participant.on('trackUnsubscribed', handleAll);
     participant.on('trackMuted', updateState);
     participant.on('trackUnmuted', updateState);
 
     return () => {
-      participant.off('trackPublished', updateState);
-      participant.off('trackUnpublished', updateState);
-      participant.off('localTrackPublished', updateState);
-      participant.off('localTrackUnpublished', updateState);
-      participant.off('trackSubscribed', updateState);
-      participant.off('trackUnsubscribed', updateState);
+      participant.off('trackPublished', handleAll);
+      participant.off('trackUnpublished', handleAll);
+      participant.off('localTrackPublished', handleAll);
+      participant.off('localTrackUnpublished', handleAll);
+      participant.off('trackSubscribed', handleAll);
+      participant.off('trackUnsubscribed', handleAll);
       participant.off('trackMuted', updateState);
       participant.off('trackUnmuted', updateState);
       if (attached && videoRef.current) {
@@ -101,6 +112,8 @@ function ParticipantTile({ participant, isLocal, isFrontCamera }) {
         muted={isLocal}
         style={{ ...mirrorStyle, display: hasVideo && !isCamOff ? 'block' : 'none' }}
       />
+      {/* audio элемент для удалённых участников */}
+      {!isLocal && <audio ref={audioRef} autoPlay playsInline style={{ display: 'none' }} />}
       {(!hasVideo || isCamOff) && (
         <div className="tile-no-video">
           <div className="tile-avatar">
@@ -267,6 +280,8 @@ export default function App() {
         setJoined(true);
         setCallStartedAt(Date.now());
         setStatus('Подключено');
+        // Разблокировать аудио (браузеры блокируют autoplay)
+        room.startAudio().catch(() => {});
         forceUpdate();
       });
 
