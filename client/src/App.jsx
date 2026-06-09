@@ -60,8 +60,12 @@ function ParticipantTile({ participant, isLocal, isFrontCamera }) {
 
     updateState();
 
+    // localTrackPublished/Unpublished — для локального участника
+    // trackPublished/Subscribed — для удалённых участников
     participant.on('trackPublished', updateState);
     participant.on('trackUnpublished', updateState);
+    participant.on('localTrackPublished', updateState);
+    participant.on('localTrackUnpublished', updateState);
     participant.on('trackSubscribed', updateState);
     participant.on('trackUnsubscribed', updateState);
     participant.on('trackMuted', updateState);
@@ -70,6 +74,8 @@ function ParticipantTile({ participant, isLocal, isFrontCamera }) {
     return () => {
       participant.off('trackPublished', updateState);
       participant.off('trackUnpublished', updateState);
+      participant.off('localTrackPublished', updateState);
+      participant.off('localTrackUnpublished', updateState);
       participant.off('trackSubscribed', updateState);
       participant.off('trackUnsubscribed', updateState);
       participant.off('trackMuted', updateState);
@@ -295,7 +301,14 @@ export default function App() {
       await room.connect(wsUrl, lkToken);
 
       setStatus('Включаем камеру...');
-      await room.localParticipant.enableCameraAndMicrophone();
+      try {
+        await room.localParticipant.enableCameraAndMicrophone();
+      } catch (camErr) {
+        console.warn('Camera/mic error:', camErr);
+        // Попробуем хотя бы микрофон
+        try { await room.localParticipant.setMicrophoneEnabled(true); } catch {}
+        setStatus('Камера недоступна — только микрофон');
+      }
       forceUpdate();
 
       socket.emit('join-room', { roomId: roomId.trim(), userName: userName.trim() });
