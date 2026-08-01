@@ -1,54 +1,66 @@
 const API_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:4000';
 
+// fetch с таймаутом: на нестабильном мобильном интернете запрос может
+// молча зависнуть навсегда — лучше ошибка через 15 секунд и повтор
+async function apiFetch(path, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetch(`${API_URL}${path}`, { ...options, signal: controller.signal });
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      throw new Error('Сервер не отвечает — проверьте интернет и попробуйте ещё раз');
+    }
+    throw new Error('Нет соединения с сервером — проверьте интернет');
+  } finally {
+    clearTimeout(timer);
+  }
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(result.message || 'Ошибка сервера');
+    err.status = response.status; // чтобы отличать 401 от сетевых сбоев
+    throw err;
+  }
+  return result;
+}
+
 export async function registerUser(data) {
-  const response = await fetch(`${API_URL}/auth/register`, {
+  return apiFetch('/auth/register', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-
-  const result = await response.json();
-
-  if (!response.ok) {
-    throw new Error(result.message || 'Ошибка регистрации');
-  }
-
-  return result;
 }
 
 export async function loginUser(data) {
-  const response = await fetch(`${API_URL}/auth/login`, {
+  return apiFetch('/auth/login', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-
-  const result = await response.json();
-
-  if (!response.ok) {
-    throw new Error(result.message || 'Ошибка входа');
-  }
-
-  return result;
 }
 
 export async function getMe(token) {
-  const response = await fetch(`${API_URL}/auth/me`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+  return apiFetch('/auth/me', {
+    headers: { Authorization: `Bearer ${token}` },
   });
+}
 
-  const result = await response.json();
+// 2FA: отправить код на выбранный канал (email/telegram) во время входа
+export async function send2faCode(data) {
+  return apiFetch('/auth/2fa/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
 
-  if (!response.ok) {
-    throw new Error(result.message || 'Ошибка проверки пользователя');
-  }
-
-  return result;
+// 2FA: проверить код → вернёт token + user
+export async function verify2fa(data) {
+  return apiFetch('/auth/2fa/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
 }

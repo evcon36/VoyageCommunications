@@ -1,0 +1,113 @@
+# Сборка iOS-приложения COMS на macOS-агентах Codemagic и заливка в TestFlight.
+#
+# Что нужно настроить в интерфейсе Codemagic перед первым запуском:
+#   1. Teams → Integrations → App Store Connect: добавить API-ключ
+#      (App Store Connect → Users and Access → Integrations → App Store Connect API).
+#   2. Создать группу переменных "appstore" и положить туда:
+#        APP_STORE_APPLE_ID   — числовой Apple ID приложения из App Store Connect
+#      Значения задаются в интерфейсе, в этот файл секреты не пишем.
+#   3. В App Store Connect заранее создать приложение с bundle id ru.voyagecoms.app.
+#
+# Подпись выполняется автоматически: Codemagic сам выпустит и подставит
+# сертификат и профиль по данным интеграции App Store Connect.
+
+workflows:
+  ios-testflight:
+    name: COMS iOS → TestFlight
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+
+    environment:
+      groups:
+        - appstore
+      vars:
+        BUNDLE_ID: "ru.voyagecoms.app"
+        XCODE_PROJECT: "client/ios/App/App.xcodeproj"
+        XCODE_SCHEME: "App"
+        # адрес боевого API — попадает в бандл на этапе сборки веб-части
+        VITE_SERVER_URL: "https://voyage-coms.ru"
+        VITE_BASE_PATH: "/"
+      node: 22
+      xcode: latest
+      # CocoaPods не нужен: Capacitor 8 подключает зависимости через
+      # Swift Package Manager, Podfile в проекте отсутствует
+
+    integrations:
+      app_store_connect: COMS App Store Connect
+
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: "ios-*"
+          include: true
+
+    scripts:
+      - name: Установка зависимостей веб-клиента
+        script: |
+          cd client
+          npm ci
+
+      - name: Сборка веб-бандла
+        script: |
+          cd client
+          npx vite build --outDir dist-coms
+          # бандл обязан ходить в боевой API, иначе приложение будет пустым
+          grep -q "voyage-coms.ru" dist-coms/assets/index-*.js \
+            || { echo "ОШИБКА: в бандле нет адреса API"; exit 1; }
+
+      - name: Убрать из iOS-бандла чужую интеллектуальную собственность
+        script: |
+          cd client
+          # Клипы с голосом реального публичного лица — основание для отказа
+          # по Guideline 5.2.1. В интерфейсе на iOS они и так скрыты, но сами
+          # файлы не должны попадать в приложение.
+          rm -f dist-coms/trump-*.mp3
+          if ls dist-coms/trump-*.mp3 >/dev/null 2>&1; then
+            echo "ОШИБКА: спорные аудиофайлы остались в бандле"; exit 1
+          fi
+          echo "спорные аудиофайлы удалены из iOS-бандла"
+
+      - name: Синхронизация с нативным проектом
+        script: |
+          cd client
+          npx cap sync ios
+
+      - name: Номер сборки
+        script: |
+          # номер должен расти монотонно, иначе TestFlight отклонит загрузку
+          BUILD_NUMBER=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo 0)
+          agvtool new-version -all $(($BUILD_NUMBER + 1))
+        working_directory: client/ios/App
+
+      - name: Настройка подписи
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE --create
+          keychain add-certificates
+          xcode-project use-profiles
+
+      - name: Сборка ipa
+        script: |
+          xcode-project build-ipa \
+            --project "$CM_BUILD_DIR/$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        # в App Store не отправляем автоматически: до подачи нужно закрыть
+        # входящие звонки и работу в фоне (CallKit/PushKit)
+        submit_to_app_store: false
+      email:
+        recipients:
+          - io449452@gmail.com
+        notify:
+          success: true
+          failure: true

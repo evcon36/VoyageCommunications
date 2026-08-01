@@ -1,3 +1,38 @@
 client/.env
+client/.env.production
 server/.env
 server/dev.db
+deploy/deploy.config.json
+client/deploy-dist.tar.gz
+client/dist-audit
+# Сборочные артефакты веб-клиента
+client/dist-coms/
+
+# iOS (Capacitor): нативный проект коммитим, артефакты сборки — нет
+client/ios/App/App/public/
+client/ios/App/build/
+client/ios/App/Pods/
+client/ios/DerivedData/
+client/ios/App/App.xcodeproj/xcuserdata/
+client/ios/App/App.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Зависимости
+node_modules/
+
+# Локальные настройки Claude Code
+.claude/
+
+# Резервные копии и мусор от прерванных команд
+*.bak-p0
+*.bak-typo
+*.bak-*
+client/public$f
+
+# Сборки Electron-приложения
+desktop/dist/
+desktop/release/
+
+# Внутренние оценки рисков — не для публичного репозитория
+БЕЗОПАСНОСТЬ-COMS.md
+НАГРУЗОЧНЫЕ-ТЕСТЫ.md
+IOS-ПРИЛОЖЕНИЕ.md

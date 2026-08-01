@@ -9,8 +9,8 @@ export default function AuthPage({ onLoginSuccess, authError }) {
     <div className="auth-shell">
       <div className="auth-header">
         <div>
-          <div className="brand">voyage communications</div>
-          <div className="subtitle">secure access to your video workspace</div>
+          <div className="brand">COMS</div>
+          <div className="subtitle">безопасный доступ к видеозвонкам</div>
         </div>
       </div>
 
@@ -25,6 +25,7 @@ export default function AuthPage({ onLoginSuccess, authError }) {
         ) : (
           <RegisterForm
             onSwitchToLogin={() => setMode('login')}
+            onRegisterSuccess={onLoginSuccess}
           />
         )}
       </div>

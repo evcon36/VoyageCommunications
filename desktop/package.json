@@ -1,0 +1,62 @@
+{
+  "name": "coms-desktop",
+  "version": "1.0.1",
+  "description": "COMS — видеозвонки Voyage (десктопное приложение)",
+  "main": "main.js",
+  "author": "Voyage",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win",
+    "build:dir": "electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "ru.voyage.coms",
+    "productName": "COMS",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "picker.html",
+      "loading.html",
+      "assets/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "COMS"
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://voyage-coms.ru/downloads/",
+        "channel": "latest"
+      }
+    ],
+    "artifactName": "COMS-Setup-${version}.${ext}"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}

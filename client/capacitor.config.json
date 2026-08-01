@@ -1,0 +1,18 @@
+{
+  "appId": "ru.voyagecoms.app",
+  "appName": "COMS",
+  "webDir": "dist-coms",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#0f1115",
+    "preferredContentMode": "mobile"
+  },
+  "server": {
+    "iosScheme": "capacitor"
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": false
+    }
+  }
+}

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<title>COMS</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #0e1013; color: #eef1f5; user-select: none;
+    font: 16px/1.5 Inter, system-ui, 'Segoe UI', Roboto, sans-serif;
+  }
+  .card { text-align: center; max-width: 420px; padding: 24px; }
+  .brand { font-size: 34px; font-weight: 700; letter-spacing: -.02em; }
+  .sub { margin-top: 6px; color: #9aa3b0; font-size: 14px; }
+  .spinner {
+    width: 28px; height: 28px; margin: 26px auto 0; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,.14); border-top-color: #f7c948;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .msg { margin-top: 22px; font-size: 15px; }
+  .hint { margin-top: 12px; font-size: 13px; color: #9aa3b0; line-height: 1.5; }
+  button {
+    margin-top: 20px; height: 46px; padding: 0 22px; border: none; border-radius: 12px;
+    background: linear-gradient(180deg,#fbd35f,#f7c948); color: #201900;
+    font: inherit; font-weight: 700; cursor: pointer;
+  }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">COMS</div>
+    <div class="sub">видеозвонки Voyage</div>
+
+    <div id="loading">
+      <div class="spinner"></div>
+      <div class="msg">Подключаемся…</div>
+    </div>
+
+    <div id="error" class="hidden">
+      <div class="msg">Не удалось подключиться к серверу</div>
+      <div class="hint">
+        Проверьте интернет. Приложение уже попробовало оба адреса —
+        основной и запасной. Если сеть на месте, возможно, провайдер
+        ограничивает доступ: попробуйте другую сеть или VPN.
+      </div>
+      <button id="retry">Повторить</button>
+    </div>
+  </div>
+
+<script>
+  if (new URLSearchParams(location.search).get('error') === '1') {
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('error').classList.remove('hidden');
+  }
+  document.getElementById('retry').onclick = () => {
+    document.getElementById('error').classList.add('hidden');
+    document.getElementById('loading').classList.remove('hidden');
+    window.comsDesktop.retry();
+  };
+</script>
+</body>
+</html>

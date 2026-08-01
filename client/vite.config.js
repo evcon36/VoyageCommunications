@@ -8,4 +8,16 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
   },
+  build: {
+    // тяжёлые библиотеки — отдельными файлами: браузер качает их параллельно
+    // и кэширует между релизами (обычно меняется только код приложения)
+    rolldownOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/livekit-client')) return 'livekit';
+          if (id.includes('node_modules/react') || id.includes('node_modules/socket.io')) return 'vendor';
+        },
+      },
+    },
+  },
 })

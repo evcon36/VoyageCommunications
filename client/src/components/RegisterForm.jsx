@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { registerUser } from '../services/auth';
 
-export default function RegisterForm({ onSwitchToLogin }) {
+export default function RegisterForm({ onSwitchToLogin, onRegisterSuccess }) {
   const [form, setForm] = useState({
     username: '',
     password: '',
@@ -25,6 +25,12 @@ export default function RegisterForm({ onSwitchToLogin }) {
 
     try {
       const result = await registerUser(form);
+      // сразу входим — токен уже выдан при регистрации
+      if (result.token && onRegisterSuccess) {
+        localStorage.setItem('token', result.token);
+        onRegisterSuccess(result.user, result.token);
+        return;
+      }
       setMessage(result.message || 'Аккаунт создан');
       setForm({ username: '', password: '' });
     } catch (err) {
