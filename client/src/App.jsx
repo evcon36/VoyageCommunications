@@ -3333,15 +3333,25 @@ export default function App() {
               <button className="ghost-btn" style={{ height: 36, padding: '0 12px' }} onClick={() => setIsChatOpen(false)}><Icon name="close" size={16} /></button>
             </div>
           </div>
-          <div className="chat-body" ref={chatBodyRef}>
+          <div className="chat-body chat-thread" ref={chatBodyRef}>
             {messages.length === 0
               ? <div className="chat-empty">Сообщений пока нет. Напишите первое сообщение.</div>
               : messages.map((msg, i) => {
                 const isOwn = msg.userName === userName;
+                // Имя показываем только у первого сообщения подряд от одного
+                // человека — иначе лента превращается в частокол подписей.
+                const prev = messages[i - 1];
+                const startsGroup = !prev || prev.userName !== msg.userName;
                 return (
-                  <div key={`${msg.timestamp}-${i}`} className={`message-item ${isOwn ? 'own' : ''}`}>
-                    <div className="message-meta"><span>{msg.userName}</span><span>{msg.timestamp}</span></div>
-                    <div className="message-bubble">{renderMessageText(msg.text)}</div>
+                  <div
+                    key={`${msg.timestamp}-${i}`}
+                    className={`msg${isOwn ? ' msg--own' : ''}${startsGroup ? ' msg--start' : ''}`}
+                  >
+                    {startsGroup && !isOwn && <div className="msg-author">{msg.userName}</div>}
+                    <div className="msg-bubble">
+                      <span className="msg-text">{renderMessageText(msg.text)}</span>
+                      <span className="msg-time">{msg.timestamp}</span>
+                    </div>
                   </div>
                 );
               })}
@@ -3352,10 +3362,12 @@ export default function App() {
               value={messageText}
               onChange={e => setMessageText(e.target.value)}
               onKeyDown={handleMessageKeyDown}
-              placeholder="Введите сообщение"
+              placeholder="Сообщение"
               disabled={!joined}
             />
-            <button className="send-btn" onClick={sendMessage} disabled={!joined}>Отправить</button>
+            <button className="send-btn" onClick={sendMessage} disabled={!joined || !messageText.trim()} aria-label="Отправить">
+              <Icon name="send" size={20} />
+            </button>
           </div>
         </aside>
       )}
@@ -3600,11 +3612,6 @@ export default function App() {
               {status !== 'Подключено' && <div className="status-badge">{status}</div>}
               <button className="ghost-btn" style={{ height: 36, padding: '0 12px' }} title="Участники" onClick={() => setIsParticipantsOpen(p => !p)}><Icon name="users" size={16} /> {allParticipants.length}</button>
               <button className="ghost-btn" style={{ height: 36, padding: '0 12px' }} onClick={() => { setAccountTab('profile'); setIsAccountPanelOpen(p => !p); }}><Icon name="menu" size={16} /></button>
-              <button className="ghost-btn" style={{ height: 36, padding: '0 12px' }} onClick={() => {
-                localStorage.removeItem('token');
-                setAuthUser(null);
-                leaveCall();
-              }}>Выйти</button>
             </div>
           </div>
 
@@ -3745,6 +3752,15 @@ export default function App() {
 
           {/* Controls bar — иконки, overlay, авто-скрытие */}
           <div className="controls-bar" onClick={e => { e.stopPropagation(); revealControls(); }}>
+            {/* Попап реакций — сосед сетки, а не потомок кнопки: раньше он
+                центрировался по кнопке шириной 48px и уезжал за край экрана */}
+            {isReactionsOpen && (
+              <div className="reactions-popover" onClick={e => e.stopPropagation()}>
+                {REACTIONS.map(e => (
+                  <button key={e} className="reaction-btn" onClick={() => sendReaction(e)}>{e}</button>
+                ))}
+              </div>
+            )}
             <div className="controls-grid">
             <button className={`ctrl-round ${isMuted ? 'ctrl-round--off' : ''}`} title={isMuted ? 'Включить микрофон' : 'Выключить микрофон'} onClick={toggleMute}>
               <Icon name={isMuted ? 'micOff' : 'mic'} size={22} />
@@ -3762,21 +3778,16 @@ export default function App() {
                 <Icon name="screen" size={22} />
               </button>
             )}
-            <button className={`ctrl-round ${isSoundsPanelOpen ? 'ctrl-round--active' : ''}`} title="Звуки" onClick={() => setIsSoundsPanelOpen(p => !p)}>
-              <Icon name="music" size={22} />
-            </button>
-            <div className="reactions-wrap">
-              {isReactionsOpen && (
-                <div className="reactions-popover" onClick={e => e.stopPropagation()}>
-                  {REACTIONS.map(e => (
-                    <button key={e} className="reaction-btn" onClick={() => sendReaction(e)}>{e}</button>
-                  ))}
-                </div>
-              )}
-              <button className={`ctrl-round ${isReactionsOpen ? 'ctrl-round--active' : ''}`} title="Реакции" onClick={() => setIsReactionsOpen(p => !p)}>
-                <Icon name="smile" size={22} />
+            {/* Ради одних аплодисментов панель открывать незачем: на iOS
+                остальные звуки вырезаны из сборки (чужие права на голос) */}
+            {SOUNDS.length > 1 && (
+              <button className={`ctrl-round ${isSoundsPanelOpen ? 'ctrl-round--active' : ''}`} title="Звуки" onClick={() => setIsSoundsPanelOpen(p => !p)}>
+                <Icon name="music" size={22} />
               </button>
-            </div>
+            )}
+            <button className={`ctrl-round ${isReactionsOpen ? 'ctrl-round--active' : ''}`} title="Реакции" onClick={() => setIsReactionsOpen(p => !p)}>
+              <Icon name="smile" size={22} />
+            </button>
             <button className={`ctrl-round ${isChatOpen ? 'ctrl-round--active' : ''}`} title="Чат" onClick={() => setIsChatOpen(p => !p)}>
               <Icon name="chat" size={22} />
               {messages.length > 0 && <span className="ctrl-badge">{messages.length}</span>}
@@ -3795,13 +3806,11 @@ export default function App() {
                 <Icon name={recActive ? 'stop' : 'record'} size={22} />
               </button>
             )}
-            </div>
-            {/* Завершение звонка отделено от переключателей: необратимое
-                действие не должно стоять в одном ряду с ними (Apple HIG) */}
-            <div className="controls-end">
-              <button className="ctrl-round ctrl-round--danger" title="Завершить звонок" aria-label="Завершить звонок" onClick={leaveCall}>
-                <Icon name="phoneOff" size={22} />
-              </button>
+            {/* Сброс — последняя кнопка сетки: на телефоне он встаёт
+                в правый нижний угол, отдельный ряд под него не нужен */}
+            <button className="ctrl-round ctrl-round--danger" title="Завершить звонок" aria-label="Завершить звонок" onClick={leaveCall}>
+              <Icon name="phoneOff" size={22} />
+            </button>
             </div>
           </div>
         </div>

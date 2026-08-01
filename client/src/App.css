@@ -287,7 +287,10 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
   width: 100%;
   height: 100%;
   gap: 6px;
-  padding: 6px;
+  /* Отступаем от вырезов и полосы жестов: иначе подпись участника
+     в нижнем углу плитки упирается в край экрана и обрезается. */
+  padding: calc(6px + env(safe-area-inset-top)) calc(6px + env(safe-area-inset-right))
+           calc(6px + env(safe-area-inset-bottom)) calc(6px + env(safe-area-inset-left));
   align-content: stretch;
 }
 
@@ -481,7 +484,6 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
   align-items: center;
   gap: 10px;
 }
-.controls-end { display: flex; }
 
 /* на узких экранах — скруглённая нижняя панель, а не «пилюля» (иначе кнопки заворачиваются в блоб) */
 @media (max-width: 640px) {
@@ -495,24 +497,19 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
   }
   .controls-hidden .controls-bar { transform: translateY(160%); }
 
-  /* Ширина ровно под четыре кнопки, поэтому ряды всегда одинаковые,
-     а неполный последний ряд центрируется сам. Без ограничения ширины
-     получалось 6 кнопок в первом ряду и 3 во втором — отсюда и перекос. */
+  /* Ровно два ряда по четыре: сетка занимает минимум места, а сброс
+     всегда стоит в правом нижнем углу — привычное место и не путается
+     с переключателями рядом. */
   .controls-grid {
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(4, 48px);
     justify-content: center;
     gap: 14px;
-    max-width: 234px;          /* 4 × 48px + 3 × 14px */
-    margin: 0 auto;
-  }
-  /* Красная кнопка получает свой ряд и отделяется линией: так её
-     не нажмёшь случайно, целясь в соседний переключатель. */
-  .controls-end {
     width: 100%;
-    justify-content: center;
-    margin-top: 14px;
-    padding-top: 14px;
-    border-top: 1px solid rgba(255,255,255,0.10);
+  }
+  .controls-grid .ctrl-round--danger {
+    grid-column: 4;
+    grid-row: 2;
   }
 }
 
@@ -599,41 +596,89 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
 .settings-body > * { flex-shrink: 0; }
 .chat-empty { color: var(--text-dim); font-size: 14px; line-height: 1.5; }
 
-.message-item { display: flex; flex-direction: column; gap: 4px; max-width: 90%; }
-.message-item.own { align-self: flex-end; }
-.message-meta { display: flex; gap: 8px; font-size: 12px; color: var(--text-dim); }
-.message-bubble { padding: 10px 13px; border-radius: 12px; background: var(--surface-3); line-height: 1.45; word-break: break-word; font-size: 14px; }
-.message-item.own .message-bubble { background: color-mix(in srgb, var(--accent) 16%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent); }
+/* ── Лента сообщений: пузыри как в переписке на телефоне ── */
+.chat-thread { gap: 2px; }
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 78%;
+}
+.msg--own { align-self: flex-end; align-items: flex-end; }
+/* новая группа сообщений отделяется от предыдущей заметнее, чем строки внутри неё */
+.msg--start { margin-top: 10px; }
+.msg-author {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 0 0 3px 12px;
+}
+.msg-bubble {
+  position: relative;
+  padding: 8px 13px 8px 13px;
+  border-radius: 20px;
+  background: var(--surface-3);
+  line-height: 1.35;
+  word-break: break-word;
+  font-size: 16px;                 /* как в системных мессенджерах */
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.msg-text { min-width: 0; }
+.msg-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-dim);
+  opacity: .8;
+  transform: translateY(-1px);
+}
+.msg--own .msg-bubble {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.msg--own .msg-time { color: var(--accent-ink); opacity: .55; }
+/* скругление «хвоста» у крайних пузырей группы — узнаваемый приём переписок */
+.msg--own .msg-bubble { border-bottom-right-radius: 6px; }
+.msg:not(.msg--own) .msg-bubble { border-bottom-left-radius: 6px; }
 
 .chat-input-row {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 8px;
-  padding: 14px;
+  align-items: center;
+  padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--edge);
   flex-shrink: 0;
 }
 .chat-input {
   width: 100%;
   height: 44px;
-  border-radius: 12px;
+  border-radius: 999px;            /* поле-капсула, как в системных мессенджерах */
   border: 1px solid var(--edge);
   background: var(--field-bg);
   color: var(--text);
-  padding: 0 12px;
+  padding: 0 16px;
   outline: none;
-  font-size: 14px;
+  font-size: 16px;                 /* меньше 16px — iOS зумит страницу при фокусе */
 }
 .chat-input:focus { border-color: color-mix(in srgb, var(--accent) 80%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent); }
 .send-btn {
+  width: 44px;
   height: 44px;
-  padding: 0 16px;
-  border-radius: 12px;
+  padding: 0;
+  border-radius: 50%;
   background: var(--accent);
   color: var(--accent-ink);
-  font-weight: 700;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity .15s ease, transform .1s ease;
 }
+.send-btn:active:not(:disabled) { transform: scale(0.92); }
+.send-btn:disabled { opacity: .35; }
 
 /* ── Account modal ── */
 .modal-backdrop {
@@ -1206,7 +1251,7 @@ input:-webkit-autofill:focus {
   padding: 0 14px;
   outline: none;
   transition: background .15s, border-color .15s, box-shadow .15s;
-  font-size: 14px;
+  font-size: 16px;                 /* меньше 16px — iOS зумит страницу при фокусе */
 }
 .contact-search:hover { background: var(--surface-3); }
 .contact-search:focus { background: var(--surface-2); border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-soft); }
@@ -1438,13 +1483,18 @@ a.room-card-btn { text-decoration: none; }
 }
 
 /* ── Emoji reactions ── */
-.reactions-wrap { position: relative; }
 .reactions-popover {
+  /* отсчитывается от панели кнопок и всегда всплывает над ней целиком */
   position: absolute;
-  bottom: 62px;
-  left: 50%;
-  transform: translateX(-50%);
+  bottom: calc(100% + 10px);
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: max-content;
+  max-width: calc(100vw - 32px);
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 6px;
   padding: 8px 10px;
   border-radius: 999px;
@@ -1992,7 +2042,7 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   flex: 1 1 auto; min-width: 0; height: 36px;
   border-radius: 10px; border: 1px solid transparent;
   background: color-mix(in srgb, var(--text) 5%, transparent); color: var(--text);
-  padding: 0 12px; font-size: 14px; outline: none;
+  padding: 0 12px; font-size: 16px; outline: none;
   transition: background .15s, border-color .15s;
 }
 .employee-title-input:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
@@ -2091,7 +2141,7 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   color: var(--text);
   padding: 0 14px;
   outline: none;
-  font-size: 14px;
+  font-size: 16px;
 }
 .meeting-input:first-child { flex: 1; min-width: 160px; }
 .meeting-form .primary-btn { height: 44px; }
@@ -2265,7 +2315,7 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   color: var(--text);
   padding: 0 14px;
   outline: none;
-  font-size: 14px;
+  font-size: 16px;
 }
 .text-input:focus-visible {
   border-color: var(--accent-border);
