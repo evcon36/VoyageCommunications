@@ -70,10 +70,12 @@
 	<string>Камера нужна, чтобы вас видели другие участники видеозвонка.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Микрофон нужен, чтобы вас слышали другие участники звонка.</string>
+	<!-- Только audio: режим voip обязывает использовать PushKit и CallKit,
+	     а их пока нет. Объявлять неиспользуемую возможность — повод для отказа.
+	     Вернуть voip вместе с реализацией входящих звонков. -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
-		<string>voip</string>
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
