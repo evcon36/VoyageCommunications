@@ -1,8 +1,9 @@
 # Сборка iOS-приложения COMS на macOS-агентах Codemagic и заливка в TestFlight.
 #
 # Что нужно настроить в интерфейсе Codemagic перед первым запуском:
-#   1. Teams → Integrations → App Store Connect: добавить API-ключ
-#      (App Store Connect → Users and Access → Integrations → App Store Connect API).
+#   1. Settings → Integrations → Developer Portal: ключ App Store Connect.
+#      Ключ один на весь аккаунт Apple, отдельный для каждого приложения не нужен.
+#      Имя ключа должно совпадать со значением integrations.app_store_connect ниже.
 #   2. Создать группу переменных "appstore" и положить туда:
 #        APP_STORE_APPLE_ID   — числовой Apple ID приложения из App Store Connect
 #      Значения задаются в интерфейсе, в этот файл секреты не пишем.
@@ -33,7 +34,9 @@ workflows:
       # Swift Package Manager, Podfile в проекте отсутствует
 
     integrations:
-      app_store_connect: COMS App Store Connect
+      # имя ключа из Codemagic → Settings → Integrations → Developer Portal.
+      # Ключ один на весь аккаунт Apple и общий с другими приложениями Voyage.
+      app_store_connect: Voyage ASC
 
     triggering:
       events:
