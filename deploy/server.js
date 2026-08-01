@@ -22,6 +22,13 @@ const ALLOWED_ORIGINS = [
   "https://www.voyage-coms.ru",
   // запасной путь мимо Cloudflare (для провайдеров, которые режут CF)
   "https://communications.voyage-community.ru",
+  // Мобильное приложение отдаёт свой бандл с внутренней схемы, а не с домена,
+  // поэтому его origin выглядит так. Без этих строк WKWebView режет ответы
+  // по CORS, и приложение показывает «нет соединения с сервером».
+  "capacitor://localhost",
+  "ionic://localhost",
+  "http://localhost",
+  "https://localhost",
 ];
 
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
