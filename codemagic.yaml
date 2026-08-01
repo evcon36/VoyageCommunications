@@ -86,10 +86,22 @@ workflows:
       - name: Настройка подписи
         script: |
           set -e
+          # Приватный ключ сертификата Apple не отдаёт: он остаётся на машине,
+          # где сертификат выпускали. Поэтому подписываем своим ключом —
+          # по нему выпускается отдельный сертификат, существующие не трогаются.
+          if [ -z "$CERTIFICATE_PRIVATE_KEY" ]; then
+            echo "ОШИБКА: не задана переменная CERTIFICATE_PRIVATE_KEY."
+            echo "Сгенерируйте ключ:  openssl genrsa 2048"
+            echo "и положите его целиком (вместе со строками BEGIN/END)"
+            echo "в группу переменных appstore как CERTIFICATE_PRIVATE_KEY."
+            exit 1
+          fi
+
           keychain initialize
-          # выпускаем (или переиспользуем) сертификат и профиль под этот bundle id
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --type IOS_APP_STORE --create
+            --type IOS_APP_STORE \
+            --certificate-key @env:CERTIFICATE_PRIVATE_KEY \
+            --create
           keychain add-certificates
 
           echo "--- профили на машине ---"
