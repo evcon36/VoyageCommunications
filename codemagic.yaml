@@ -85,11 +85,24 @@ workflows:
 
       - name: Настройка подписи
         script: |
+          set -e
           keychain initialize
+          # выпускаем (или переиспользуем) сертификат и профиль под этот bundle id
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE --create
           keychain add-certificates
-          xcode-project use-profiles
+
+          echo "--- профили на машине ---"
+          ls -la ~/Library/MobileDevice/Provisioning\ Profiles/ || true
+
+          # Путь к проекту указываем явно: без него поиск идёт по маске от корня
+          # репозитория и до вложенного client/ios/App не добирается — архив
+          # потом падает с «App requires a provisioning profile».
+          xcode-project use-profiles --project "$XCODE_PROJECT"
+
+          echo "--- проверяем, что профиль реально прописан в проект ---"
+          grep -c PROVISIONING_PROFILE_SPECIFIER "$XCODE_PROJECT/project.pbxproj" \
+            || { echo "ОШИБКА: use-profiles не прописал профиль в проект"; exit 1; }
 
       - name: Сборка ipa
         script: |
