@@ -96,10 +96,18 @@ function Select({ value, onChange, options, placeholder, className = '', size = 
 }
 
 // Аватар: реальная картинка, если она есть, иначе инициал
+// Сервер хранит аватары относительным путём вида /uploads/avatars/x.jpg.
+// В браузере он сам достраивается до домена, а в мобильном приложении
+// указывал бы внутрь бандла — картинки не находились. Достраиваем явно.
+function mediaUrl(path) {
+  if (!path) return path;
+  return /^(https?:|data:|blob:)/.test(path) ? path : `${SERVER_URL}${path}`;
+}
+
 function Avatar({ url, name, className = 'company-member-avatar' }) {
   const initial = (name || '?').trim()[0]?.toUpperCase() || '?';
   return url
-    ? <img className={className} src={url} alt="" loading="lazy" />
+    ? <img className={className} src={mediaUrl(url)} alt="" loading="lazy" />
     : <span className={className}>{initial}</span>;
 }
 
@@ -1840,6 +1848,10 @@ export default function App() {
         } else {
           await room.localParticipant.setMicrophoneEnabled(true);
         }
+        // Событие Connected приходит раньше, чем включается микрофон,
+        // поэтому статус нужно вернуть сюда — иначе на экране навсегда
+        // остаётся «Включаем микрофон…».
+        setStatus('Подключено');
       } catch (camErr) {
         console.warn('Camera/mic error:', camErr);
         try { await room.localParticipant.setMicrophoneEnabled(true); } catch {}
@@ -2993,7 +3005,7 @@ export default function App() {
                     onClick={() => avatarInputRef.current?.click()}
                   >
                     {authUser?.avatarUrl
-                      ? <img src={authUser.avatarUrl} alt="" className="avatar-img" />
+                      ? <img src={mediaUrl(authUser.avatarUrl)} alt="" className="avatar-img" />
                       : <span className="avatar-placeholder">{(authUser?.displayName || authUser?.username || '?')[0].toUpperCase()}</span>}
                     <span className="avatar-edit-hint">✎</span>
                   </button>
@@ -3083,7 +3095,14 @@ export default function App() {
                 )}
 
                 <div className="legal-links">
-                  <a href={`${BASE}privacy.html`} target="_blank" rel="noopener noreferrer">
+                  {/* В приложении новую вкладку открыть некуда: WKWebView просто
+                      игнорирует target="_blank". Внутри приложения переходим на
+                      месте — на странице есть ссылка обратно. */}
+                  <a
+                    href={`${BASE}privacy.html`}
+                    target={IS_IOS ? undefined : '_blank'}
+                    rel={IS_IOS ? undefined : 'noopener noreferrer'}
+                  >
                     Политика конфиденциальности
                   </a>
                 </div>
@@ -3726,6 +3745,7 @@ export default function App() {
 
           {/* Controls bar — иконки, overlay, авто-скрытие */}
           <div className="controls-bar" onClick={e => { e.stopPropagation(); revealControls(); }}>
+            <div className="controls-grid">
             <button className={`ctrl-round ${isMuted ? 'ctrl-round--off' : ''}`} title={isMuted ? 'Включить микрофон' : 'Выключить микрофон'} onClick={toggleMute}>
               <Icon name={isMuted ? 'micOff' : 'mic'} size={22} />
             </button>
@@ -3775,9 +3795,14 @@ export default function App() {
                 <Icon name={recActive ? 'stop' : 'record'} size={22} />
               </button>
             )}
-            <button className="ctrl-round ctrl-round--danger" title="Завершить звонок" onClick={leaveCall}>
-              <Icon name="phoneOff" size={22} />
-            </button>
+            </div>
+            {/* Завершение звонка отделено от переключателей: необратимое
+                действие не должно стоять в одном ряду с ними (Apple HIG) */}
+            <div className="controls-end">
+              <button className="ctrl-round ctrl-round--danger" title="Завершить звонок" aria-label="Завершить звонок" onClick={leaveCall}>
+                <Icon name="phoneOff" size={22} />
+              </button>
+            </div>
           </div>
         </div>
       )}

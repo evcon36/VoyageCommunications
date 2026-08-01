@@ -459,7 +459,7 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
   transform: translateX(-50%);
   z-index: 6;
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
   justify-content: center;
   padding: 10px 14px;
@@ -476,10 +476,44 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
   transform: translate(-50%, 160%);
   pointer-events: none;
 }
+.controls-grid {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.controls-end { display: flex; }
+
 /* на узких экранах — скруглённая нижняя панель, а не «пилюля» (иначе кнопки заворачиваются в блоб) */
 @media (max-width: 640px) {
-  .controls-bar { left: 10px; right: 10px; bottom: 12px; transform: none; max-width: none; border-radius: 22px; }
+  .controls-bar {
+    left: 10px; right: 10px; bottom: 12px;
+    transform: none; max-width: none;
+    border-radius: 26px;
+    flex-direction: column;
+    gap: 0;
+    padding: 14px 12px;
+  }
   .controls-hidden .controls-bar { transform: translateY(160%); }
+
+  /* Ширина ровно под четыре кнопки, поэтому ряды всегда одинаковые,
+     а неполный последний ряд центрируется сам. Без ограничения ширины
+     получалось 6 кнопок в первом ряду и 3 во втором — отсюда и перекос. */
+  .controls-grid {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 14px;
+    max-width: 234px;          /* 4 × 48px + 3 × 14px */
+    margin: 0 auto;
+  }
+  /* Красная кнопка получает свой ряд и отделяется линией: так её
+     не нажмёшь случайно, целясь в соседний переключатель. */
+  .controls-end {
+    width: 100%;
+    justify-content: center;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255,255,255,0.10);
+  }
 }
 
 .ctrl-round {
@@ -1005,8 +1039,10 @@ input:-webkit-autofill:focus {
     align-items: center;
     justify-content: center;
   }
-  .controls-bar { gap: 10px; padding: 14px 12px; }
-  .ctrl-round { width: 46px; height: 46px; }
+  /* gap здесь не задаём: на телефоне панель выстроена в колонку,
+     а расстояния внутри задают .controls-grid и .controls-end */
+  .controls-bar { padding: 14px 12px; }
+  .ctrl-round { width: 48px; height: 48px; }
   .camera-strip { height: 100px; }
   .participant-tile--small { min-width: 80px; max-width: 80px; }
   .chat-overlay { width: 100%; left: 0; right: 0; }
@@ -1202,19 +1238,27 @@ input:-webkit-autofill:focus {
 /* ── Call / knock popup ── */
 .call-popup {
   position: fixed;
-  top: 24px;
-  left: 50%;
-  transform: translateX(-50%);
+  /* без учёта безопасной зоны плашка налезала на строку состояния
+     и Dynamic Island — на iPhone это выглядело обрезанным */
+  top: calc(env(safe-area-inset-top) + 12px);
+  /* Центрируем полями, а не transform: анимация появления тоже задаёт
+     transform и затирала бы translateX(-50%) — плашку уводило вбок,
+     а по окончании анимации дёргало в центр. */
+  left: 12px;
+  right: 12px;
+  margin-inline: auto;
   z-index: 300;
+  width: min(360px, calc(100vw - 24px));
   background: rgba(20,20,20,0.97);
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  border-radius: 16px;
-  padding: 18px 22px;
-  min-width: 280px;
+  border-radius: 20px;
+  padding: 16px 20px;
   text-align: center;
   box-shadow: 0 12px 40px rgba(0,0,0,0.6);
   animation: fadeInUp .25s ease;
 }
+.call-popup-actions .primary-btn,
+.call-popup-actions .ghost-btn { flex: 1; min-height: 46px; }
 .call-popup-title { font-size: 14px; color: var(--text-dim); margin-bottom: 6px; }
 .call-popup-from { font-size: 20px; font-weight: 700; color: var(--accent-text); margin-bottom: 14px; }
 .call-popup-actions { display: flex; gap: 10px; justify-content: center; }
