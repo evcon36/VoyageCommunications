@@ -208,6 +208,23 @@ const SPEAKER_FROM = 6;      // на телефоне с этого числа �
 const TILE_GAP = 8;
 const DEFAULT_ASPECT = 9 / 16;
 
+// ── Ошибки подключения к LiveKit ──
+// Срыв рукопожатия на слабой сети выглядит как окончательный отказ, хотя
+// достаточно повторить. Сюда же попадают формулировки самой библиотеки
+// («could not establish signal connection: Abort handler called»), которые
+// пользователю показывать бессмысленно.
+const RETRIABLE_CONNECT = /503|service unavailable|websocket|signal connection|abort handler|timeout|timed out|network/i;
+function isRetriableConnect(e) {
+  return RETRIABLE_CONNECT.test(String(e?.message || ''));
+}
+function humanConnectError(e) {
+  const m = String(e?.message || '');
+  if (RETRIABLE_CONNECT.test(m)) {
+    return 'не удалось связаться с сервером звонков. Проверьте интернет и попробуйте ещё раз';
+  }
+  return m || 'неизвестная ошибка';
+}
+
 // ── Раскладка без обрезки ──
 // Видео никогда не режем: плитка принимает пропорцию потока. Участники
 // разбиваются на ряды, ряд заполняет ширину, высота ряда следует из суммы
@@ -445,12 +462,12 @@ function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMute
       ? { transform: 'scaleX(-1)', WebkitTransform: 'scaleX(-1)' }
       : {};
 
-  // Раскладке нужны пропорция потока и факт выключенной камеры: плитки
-  // подгоняются под видео, а участники без камеры уходят из сетки вниз.
-  const noVideo = !hasVideo || isCamOff;
+  // Плитка сообщает наверх только пропорцию потока, чтобы её подогнали под
+  // видео. Факт «камера выключена» она НЕ сообщает: это решает родитель по
+  // публикации собеседника. Иначе выходил замкнутый круг, см. hasCameraOn.
   useEffect(() => {
-    onMeta?.(participant?.identity, { aspect: videoAspect, noVideo });
-  }, [onMeta, participant?.identity, videoAspect, noVideo]);
+    onMeta?.(participant?.identity, videoAspect);
+  }, [onMeta, participant?.identity, videoAspect]);
 
   return (
     <div
@@ -1979,6 +1996,11 @@ export default function App() {
         }
       });
 
+      // Публикация и снятие публикации — то, по чему раскладка решает, есть
+      // у человека камера или он уходит квадратиком вниз. Без этих двух
+      // событий участник, включивший камеру позже всех, оставался внизу.
+      room.on(RoomEvent.TrackPublished, forceUpdate);
+      room.on(RoomEvent.TrackUnpublished, forceUpdate);
       room.on(RoomEvent.TrackSubscribed, forceUpdate);
       room.on(RoomEvent.TrackUnsubscribed, forceUpdate);
       room.on(RoomEvent.LocalTrackPublished, forceUpdate);
@@ -1994,17 +2016,22 @@ export default function App() {
       });
 
       setStatus('Подключаемся...');
-      // Retry on 503 (LiveKit node limit / departure_timeout not yet cleared)
+      // Повторяем не только на 503 (лимит узла LiveKit, ещё не истёкший
+      // departure_timeout), но и на срыве самого соединения: на мобильном
+      // интернете рукопожатие иногда не успевает, и раньше это была
+      // окончательная ошибка с английским текстом вместо новой попытки.
       let connectAttempts = 0;
       while (true) {
         try {
-          await room.connect(wsUrl, lkToken);
+          await room.connect(wsUrl, lkToken, {
+            websocketTimeout: 20000,
+            peerConnectionTimeout: 20000,
+          });
           break;
         } catch (connErr) {
-          const is503 = connErr?.message?.includes('503') || connErr?.message?.includes('Service Unavailable') || connErr?.message?.includes('websocket error');
-          if (is503 && connectAttempts < 4) {
+          if (isRetriableConnect(connErr) && connectAttempts < 4) {
             connectAttempts++;
-            setStatus(`Сервер занят, повтор ${connectAttempts}/4...`);
+            setStatus(`Не дозвонились до сервера, повтор ${connectAttempts}/4...`);
             await new Promise(r => setTimeout(r, 2000 * connectAttempts));
           } else {
             throw connErr;
@@ -2043,8 +2070,12 @@ export default function App() {
 
     } catch (error) {
       console.error('joinRoom error:', error);
-      setStatus(`Ошибка: ${error.message}`);
+      setStatus(`Ошибка: ${humanConnectError(error)}`);
+      // комнату оставлять нельзя: следующая попытка входа наткнётся на
+      // полуживой объект и оборвётся ещё на подключении
+      const dead = livekitRoomRef.current;
       livekitRoomRef.current = null;
+      if (dead) { try { dead.removeAllListeners(); await dead.disconnect(); } catch { /* уже мёртвая */ } }
       joiningRef.current = false;
     }
   };
@@ -2323,24 +2354,29 @@ export default function App() {
     if (pinnedId && !allParticipants.some(p => p.identity === pinnedId)) setPinnedId(null);
   }, [allParticipants, pinnedId]);
 
-  // Пропорции потоков и «камера выключена» приходят от плиток
-  const [tileMeta, setTileMeta] = useState({});
-  const onTileMeta = useCallback((id, meta) => {
+  // Пропорции потоков приходят от плиток: их можно узнать только измерив видео
+  const [tileAspect, setTileAspect] = useState({});
+  const onTileMeta = useCallback((id, aspect) => {
     if (!id) return;
-    setTileMeta(prev => {
-      const old = prev[id];
-      if (old && old.aspect === meta.aspect && old.noVideo === meta.noVideo) return prev;
-      return { ...prev, [id]: meta };
-    });
+    setTileAspect(prev => (prev[id] === aspect ? prev : { ...prev, [id]: aspect }));
   }, []);
 
   const localP = livekitRoomRef.current?.localParticipant;
   // Своё видео живёт в плавающем окне и в сетку не попадает никогда
   const remotes = allParticipants.filter(p => p !== localP);
+  // Камера включена — это факт публикации у собеседника, и только он. Раньше
+  // об этом сообщала сама плитка, и получался замкнутый круг: пока поток не
+  // подписан, плитка говорила «камеры нет», её убирали из сетки, видеоэлемент
+  // исчезал, adaptiveStream переставал подписывать поток — и человек навсегда
+  // оставался квадратиком внизу, хотя камера у него работала.
+  const hasCameraOn = (p) => {
+    const pub = p.getTrackPublication(Track.Source.Camera);
+    return Boolean(pub) && !pub.isMuted;
+  };
   // Выключенная камера уходит из сетки вниз маленьким квадратом: она не
   // должна отнимать место у тех, кого действительно видно
-  const visible = remotes.filter(p => !tileMeta[p.identity]?.noVideo);
-  const cameraOff = remotes.filter(p => tileMeta[p.identity]?.noVideo);
+  const visible = remotes.filter(hasCameraOn);
+  const cameraOff = remotes.filter(p => !hasCameraOn(p));
 
   // «Главный + лента» — только на телефоне и только когда людей много
   const speakerMode = (isTouchDevice && visible.length >= SPEAKER_FROM) || Boolean(pinnedId);
@@ -2351,7 +2387,7 @@ export default function App() {
 
   const offRowH = cameraOff.length ? 64 + TILE_GAP : 0;
   const pack = packRows(
-    visible.map(p => tileMeta[p.identity]?.aspect || DEFAULT_ASPECT),
+    visible.map(p => tileAspect[p.identity] || DEFAULT_ASPECT),
     stageSize.w,
     Math.max(stageSize.h - offRowH, 80),
   );
@@ -3970,7 +4006,7 @@ export default function App() {
                     {row.map(idx => {
                       const p = visible[idx];
                       const h = pack.heights[ri];
-                      const a = tileMeta[p.identity]?.aspect || DEFAULT_ASPECT;
+                      const a = tileAspect[p.identity] || DEFAULT_ASPECT;
                       return (
                         <ParticipantTile
                           key={p.identity}
