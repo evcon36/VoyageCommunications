@@ -12,6 +12,7 @@ const contactsRoutes = require('./src/routes/contacts.routes');
 const internalRoutes = require('./src/routes/internal.routes');
 const prisma = require('./src/lib/prisma');
 const recTimeline = require('./src/lib/recTimeline');
+const { verifyToken } = require('./src/lib/jwt');
 
 const app = express();
 
@@ -108,7 +109,13 @@ function removeUserFromRoom(roomId, socketId) {
   if (!roomId) return;
   const users = (roomUsers.get(roomId) || []).filter(u => u.socketId !== socketId);
   if (users.length > 0) roomUsers.set(roomId, users);
-  else roomUsers.delete(roomId);
+  else {
+    roomUsers.delete(roomId);
+    // Комната опустела — список впущенных больше не нужен. Без этой строки
+    // он копился в памяти процесса до самого перезапуска сервера, и человек,
+    // однажды впущенный в комнату, заходил в неё потом без спроса.
+    admittedWaiters.delete(roomId);
+  }
 }
 
 async function endSession(socket) {
@@ -174,12 +181,20 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Пользователь сообщает, кто он (после авторизации на клиенте)
-  socket.on('presence', ({ username }) => {
-    if (!username) return;
+  // Пользователь сообщает, кто он (после авторизации на клиенте).
+  // Ник берём ИЗ ТОКЕНА, а не из тела события. Раньше сервер верил клиенту
+  // на слово: любой, кто открыл сокет, мог назваться чужим ником и получать
+  // его входящие звонки вместе со ссылкой и ключом на приватную комнату.
+  socket.on('presence', ({ token }) => {
+    let name = '';
+    try { name = String(verifyToken(token)?.username || ''); } catch { name = ''; }
+    // Токен мог протухнуть, пока приложение было открыто. Молча игнорировать
+    // нельзя: человек выглядит залогиненным, а звонки до него не доходят.
+    if (!name) return socket.emit('presence-rejected');
+    if (socket.data.presenceUsername === name) return;
     if (socket.data.presenceUsername) removePresence(socket.data.presenceUsername, socket.id);
-    socket.data.presenceUsername = String(username);
-    addPresence(socket.data.presenceUsername, socket.id);
+    socket.data.presenceUsername = name;
+    addPresence(name, socket.id);
   });
 
   // ── Звонок контакту ──
@@ -195,12 +210,18 @@ io.on('connection', (socket) => {
 
     const targets = onlineUsers.get(to);
     if (!targets || targets.size === 0) return endToCaller(socket, 'unavailable');
+    // Звонящий тоже может быть занят: сидеть в другой комнате или уже кому-то
+    // дозваниваться. Раньше проверялась только сторона получателя, и человек
+    // из активного разговора мог начать второй звонок и попасть в две комнаты.
+    if (isBusy(from)) return endToCaller(socket, 'busy-self');
     if (isBusy(to)) return endToCaller(socket, 'busy');
-    // повторный клик по «Позвонить» не должен плодить звонки и комнаты
-    for (const c of activeCalls.values()) if (c.from === from) return;
 
     const callId = `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const call = { callId, from, to, roomSlug, inviteKey, fromName: fromName || from, state: 'ringing' };
+    const call = {
+      callId, from, to, roomSlug, inviteKey, fromName: fromName || from, state: 'ringing',
+      // нужен, чтобы ответ ушёл именно тому устройству, с которого звонили
+      fromSocketId: socket.id,
+    };
     call.timer = setTimeout(() => endCall(callId, 'timeout'), CALL_TIMEOUT_MS);
     activeCalls.set(callId, call);
 
@@ -219,7 +240,19 @@ io.on('connection', (socket) => {
 
     call.state = 'active';
     clearTimeout(call.timer);
-    emitTo(call.from, 'call-accepted', { callId, roomSlug: call.roomSlug, inviteKey: call.inviteKey, by: call.to });
+    // Ответ уходит тому устройству, с которого звонили. Если оно успело
+    // переподключиться и сменить socketId, падаем на рассылку по нику:
+    // иначе звонящий останется висеть в «дозвоне» после успешного ответа.
+    const payload = { callId, roomSlug: call.roomSlug, inviteKey: call.inviteKey, by: call.to };
+    if (call.fromSocketId && io.sockets.sockets.get(call.fromSocketId)) {
+      io.to(call.fromSocketId).emit('call-accepted', payload);
+    } else {
+      emitTo(call.from, 'call-accepted', payload);
+    }
+    // Разрешение войти получателю. Клиент не входит в комнату сам по нажатию
+    // «Принять»: иначе при ответе сразу с двух устройств оба входили в
+    // комнату, потому что серверный отказ приходил уже после входа.
+    socket.emit('call-accept-ok', { callId, roomSlug: call.roomSlug, inviteKey: call.inviteKey });
     // остальным устройствам получателя: звонок уже приняли, плашку убрать
     for (const sid of onlineUsers.get(call.to) || []) {
       if (sid !== socket.id) io.to(sid).emit('call-ended', { callId, reason: 'taken' });
@@ -239,6 +272,12 @@ io.on('connection', (socket) => {
     endCall(callId, 'cancelled');
   });
 
+  // Слать в комнату может только тот, кто в ней есть. Без этой проверки любой,
+  // кто открыл сокет, мог писать в чужую комнату от чужого имени, включать
+  // там ложный индикатор записи и, что хуже всего, впустить сам себя в чужую
+  // комнату ожидания, ни разу в неё не заходя.
+  const inRoom = (roomId) => Boolean(roomId) && socket.data.roomId === roomId;
+
   // Стук в приватную комнату — видят те, кто уже внутри (решает владелец)
   socket.on('knock', ({ roomId, username, name }) => {
     if (!roomId || !username) return;
@@ -256,7 +295,9 @@ io.on('connection', (socket) => {
   });
 
   socket.on('wait-admit', ({ roomId, socketId, userId }) => {
-    if (!roomId || !socketId) return;
+    if (!socketId) return;
+    // впускать может только тот, кто сам уже в этой комнате
+    if (!inRoom(roomId)) return;
     if (!admittedWaiters.has(roomId)) admittedWaiters.set(roomId, new Set());
     // для гостей вместо id аккаунта приходит их временный guestId
     admittedWaiters.get(roomId).add(String(userId || socketId));
@@ -273,29 +314,38 @@ io.on('connection', (socket) => {
   socket.on('ice-candidate', ({ roomId, candidate }) => socket.to(roomId).emit('ice-candidate', candidate));
 
   socket.on('chat-message', ({ roomId, userName, text, timestamp }) => {
-    io.to(roomId).emit('chat-message', { userName, text, timestamp });
+    if (!inRoom(roomId)) return;
+    // имя берём то, под которым человек реально вошёл в комнату
+    io.to(roomId).emit('chat-message', { userName: socket.data.userName || userName, text, timestamp });
   });
 
   socket.on('sound', ({ roomId, soundId, fromUser, toUser }) => {
+    if (!inRoom(roomId)) return;
     io.to(roomId).emit('sound', { soundId, fromUser, toUser });
   });
 
   // Индикатор записи — всем в комнате
   socket.on('recording-state', ({ roomId, active, by }) => {
+    if (!inRoom(roomId)) return;
     io.to(roomId).emit('recording-state', { active, by });
   });
 
   // Эмодзи-реакции — всем в комнате
   socket.on('reaction', ({ roomId, emoji, fromName }) => {
+    if (!inRoom(roomId)) return;
     io.to(roomId).emit('reaction', { emoji, fromName });
   });
 
   // таймлайн активных говорящих во время записи (для разметки транскрипта по никам)
   socket.on('rec-speaker', ({ roomId, speaker }) => {
+    if (!inRoom(roomId)) return;
     recTimeline.addSpeaker(roomId, speaker, Date.now());
   });
 
-  socket.on('media-state', ({ roomId, mediaState }) => socket.to(roomId).emit('media-state', mediaState));
+  socket.on('media-state', ({ roomId, mediaState }) => {
+    if (!inRoom(roomId)) return;
+    socket.to(roomId).emit('media-state', mediaState);
+  });
 
   socket.on('leave-room', async (roomId) => {
     const actualRoomId = roomId || socket.data.roomId;

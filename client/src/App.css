@@ -64,7 +64,10 @@ body {
   transition: background .25s ease, color .25s ease;
 }
 
-#root { min-height: 100vh; }
+/* Именно svh: 100vh в мобильном Safari считается по экрану без адресной
+   строки, из-за чего низ страницы уезжает под неё. Это правило шло позже
+   такого же в index.css и перебивало там безопасное значение. */
+#root { min-height: 100svh; }
 
 button, input { font: inherit; }
 
@@ -266,6 +269,10 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
   overflow: hidden;
   background: #0a0a0a;
 }
+/* Сцена задаёт свой контекст наложения, поэтому z-index увеличенного окна
+   внутри неё не мог перебить шапку и панель кнопок: они соседи сцены и
+   рисовались поверх. Пока окно увеличено, поднимаем сцену целиком. */
+.video-stage--selfbig { z-index: 12; }
 
 .video-empty {
   width: 100%;
@@ -1097,7 +1104,7 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
 .tile-mute-btn--on { opacity: 1; }
 
 /* ── Auth pages ── */
-.auth-shell { min-height: 100vh; max-width: 420px; margin: 0 auto; padding: 40px 24px; display: flex; flex-direction: column; justify-content: center; gap: 22px; }
+.auth-shell { min-height: 100svh; max-width: 420px; margin: 0 auto; padding: 40px 24px; display: flex; flex-direction: column; justify-content: center; gap: 22px; }
 .auth-header { text-align: center; }
 .auth-header .brand { font-size: 28px; }
 .auth-header .subtitle { margin-top: 6px; }
@@ -1436,14 +1443,23 @@ a.room-card-btn { text-decoration: none; }
 /* ── PWA safe areas (вырез/статус-бар iPhone, жесты Android) ── */
 .precall-wrap { padding-top: calc(24px + env(safe-area-inset-top)); }
 .auth-shell { padding-top: calc(40px + env(safe-area-inset-top)); }
-.call-topbar { padding-top: calc(10px + env(safe-area-inset-top)); }
+/* В ландшафте вырез уходит вбок, и кнопки шапки прижимались вплотную к нему */
+.call-topbar {
+  padding-top: calc(10px + env(safe-area-inset-top));
+  padding-left: calc(20px + env(safe-area-inset-left));
+  padding-right: calc(20px + env(safe-area-inset-right));
+}
 .controls-bar { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
 .chat-overlay { padding-top: env(safe-area-inset-top); }
 .fs-controls { bottom: calc(18px + env(safe-area-inset-bottom)); }
 
 @media (max-width: 640px) {
   .precall-wrap { padding-top: calc(12px + env(safe-area-inset-top)); }
-  .call-topbar { padding-top: calc(8px + env(safe-area-inset-top)); }
+  .call-topbar {
+    padding-top: calc(8px + env(safe-area-inset-top));
+    padding-left: calc(10px + env(safe-area-inset-left));
+    padding-right: calc(10px + env(safe-area-inset-right));
+  }
   .controls-bar { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
 }
 
@@ -1775,7 +1791,10 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   color: var(--text);
   padding: 0 16px;
   outline: none;
-  font-size: 14px;
+  /* Ровно 16px и ни пикселем меньше: iOS зумит страницу при фокусе на поле
+     с мелким шрифтом, и после этого вёрстка остаётся съехавшей вбок.
+     Селектор с классом перебивал общее правило-предохранитель. */
+  font-size: 16px;
 }
 .company-invite input::placeholder { color: var(--text-dim); }
 .company-invite button {
@@ -2646,36 +2665,76 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 }
 .off-chip-name { font-size: 13px; color: var(--text-dim); max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ── Своё видео: всегда плавающее окно ── */
+/* Выключенная камера в ленте «главный + лента»: тот же чип, но без имени */
+.off-chip--strip { flex: 0 0 auto; width: 56px; padding: 0; justify-content: center; }
+.off-chip--strip .off-chip-name { display: none; }
+.off-chip-letter { flex-shrink: 0; }
+
+/* ── Один в звонке ── */
+.stage-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+}
+.stage-empty-title { font-size: 19px; font-weight: 600; color: var(--text); }
+.stage-empty-text { font-size: 14px; line-height: 1.45; color: var(--text-dim); max-width: 300px; }
+.stage-empty-btn {
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;            /* минимальная зона нажатия по правилам Apple */
+  padding: 0 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.08);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.stage-empty-btn:active { background: rgba(255,255,255,0.14); }
+
+/* ── Своё видео: плавающее окно (только на телефоне) ── */
+/* Размер и положение приходят числами из JS: и свёрнутое, и увеличенное
+   состояние живут на одних и тех же left/top/width/height, поэтому переход
+   между ними — одна плавная анимация без скачков. */
 .self-pip {
   position: absolute;
-  right: calc(12px + env(safe-area-inset-right));
-  bottom: calc(150px + env(safe-area-inset-bottom));
-  width: 104px;
-  height: 148px;
+  left: 0;
+  top: 0;
   border-radius: 16px;
   overflow: hidden;
   z-index: 8;
   box-shadow: 0 8px 26px rgba(0,0,0,0.55);
   border: 1px solid rgba(255,255,255,0.14);
   cursor: pointer;
-  transition: width .28s cubic-bezier(.4,0,.2,1), height .28s cubic-bezier(.4,0,.2,1),
-              right .28s cubic-bezier(.4,0,.2,1), bottom .28s cubic-bezier(.4,0,.2,1),
-              border-radius .28s;
+  touch-action: none;
+  transition: left .3s cubic-bezier(.32,.72,0,1), top .3s cubic-bezier(.32,.72,0,1),
+              width .3s cubic-bezier(.32,.72,0,1), height .3s cubic-bezier(.32,.72,0,1),
+              border-radius .3s cubic-bezier(.32,.72,0,1);
 }
 .self-pip .participant-tile { width: 100%; height: 100%; border: none; border-radius: inherit; }
 .self-pip .tile-footer { display: none; }
-/* увеличено втрое, с полями по бокам */
 .self-pip--big {
-  width: min(312px, calc(100vw - 48px));
-  height: min(444px, calc(100vh - 200px));
-  right: 50%;
-  transform: translateX(50%);
-  bottom: 50%;
-  margin-bottom: -222px;
   z-index: 12;
+  border-radius: 22px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.6);
 }
 .self-pip--big .tile-footer { display: flex; }
+/* В режиме сетки окно не сворачивается обратно в угол, а появляется сразу
+   увеличенным: ему нужен собственный въезд */
+.self-pip--enter { animation: selfPipIn .26s cubic-bezier(.32,.72,0,1); }
+@keyframes selfPipIn {
+  from { opacity: 0; transform: scale(.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
 /* фон за увеличенным окном затемняется и размывается */
 .self-scrim {
   position: absolute;
@@ -2683,8 +2742,38 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   z-index: 11;
   background: rgba(0,0,0,0.45);
   backdrop-filter: blur(14px);
+  animation: selfScrimIn .26s ease;
 }
+@keyframes selfScrimIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* Кнопка смены места своей камеры — внутри увеличенного окна, у нижнего края */
+.self-mode-btn {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 13;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;            /* минимальная зона нажатия по правилам Apple */
+  padding: 0 18px;
+  white-space: nowrap;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(18,20,24,0.72);
+  backdrop-filter: blur(16px);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  animation: selfScrimIn .26s ease;
+}
+.self-mode-btn:active { background: rgba(58,58,60,0.95); }
 
 /* во время перетаскивания анимация мешает — окно должно идти за пальцем */
-.self-pip--drag { transition: none; touch-action: none; }
-.self-pip { touch-action: none; }
+.self-pip--drag { transition: none; }
+
+/* Своя плитка в сетке нажимается: подсказываем это курсором */
+.participant-tile--tappable { cursor: pointer; }

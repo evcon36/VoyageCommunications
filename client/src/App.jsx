@@ -29,10 +29,13 @@ const REACTIONS = ['❤️', '👍', '😂', '😮', '👏', '✋'];
 
 // кликабельные ссылки в тексте чата
 const URL_RE = /(https?:\/\/[^\s<>"']+)/g;
+// Отдельная копия без флага g: у общего регэкспа с g сохраняется lastIndex
+// между вызовами test, и ссылки то оборачивались в кликабельные, то нет.
+const URL_ONE = /^https?:\/\/[^\s<>"']+$/;
 function renderMessageText(text) {
   const parts = String(text).split(URL_RE);
   return parts.map((part, i) =>
-    URL_RE.test(part)
+    URL_ONE.test(part)
       ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="chat-link">{part}</a>
       : part
   );
@@ -164,6 +167,7 @@ const CALL_END_TEXT = {
   cancelled: 'Звонок отменён',
   timeout: 'Не ответили',
   busy: 'Абонент занят',
+  'busy-self': 'Вы уже в разговоре. Сначала завершите текущий звонок',
   unavailable: 'Абонент не в сети',
   taken: 'Вы ответили на другом устройстве',
   self: 'Нельзя позвонить самому себе',
@@ -208,6 +212,14 @@ const SPEAKER_FROM = 6;      // на телефоне с этого числа �
 const TILE_GAP = 8;
 const DEFAULT_ASPECT = 9 / 16;
 
+// ── Плавающее окно своей камеры (только на телефоне) ──
+// Длинная сторона задана, короткая считается из пропорции потока: окно
+// принимает форму камеры, и видео в нём никогда не обрезается.
+const SELF_LONG = 156;
+const SELF_ZOOM = 3;         // во сколько раз увеличивается по тапу
+const PIP_MARGIN = 12;
+const SELF_MODE_KEY = 'coms-self-mode';
+
 // ── Ошибки подключения к LiveKit ──
 // Срыв рукопожатия на слабой сети выглядит как окончательный отказ, хотя
 // достаточно повторить. Сюда же попадают формулировки самой библиотеки
@@ -222,7 +234,13 @@ function humanConnectError(e) {
   if (RETRIABLE_CONNECT.test(m)) {
     return 'не удалось связаться с сервером звонков. Проверьте интернет и попробуйте ещё раз';
   }
-  return m || 'неизвестная ошибка';
+  if (/permission|notallowed|notfound|notreadable|device/i.test(m)) {
+    return 'нет доступа к камере или микрофону. Разрешите его в настройках';
+  }
+  // Сообщение библиотеки показывать нельзя: оно на английском и человеку
+  // ничего не объясняет. Подробности остаются в консоли.
+  console.error('connect error:', m);
+  return 'не удалось войти в звонок. Попробуйте ещё раз';
 }
 
 // ── Раскладка без обрезки ──
@@ -255,9 +273,14 @@ function packRows(aspects, W, H, gap = TILE_GAP) {
       heights.push(h);
       prev = h;
     }
-    const total = heights.reduce((a, b) => a + b, 0) + gap * (rows.length - 1);
-    const scale = Math.min(1, H / total);
+    // Уменьшать надо только сами плитки: зазоры между рядами не сжимаются.
+    // Если делить всю высоту вместе с ними, сетка вылезает за экран на
+    // высоту зазоров, и последний ряд подрезается снизу.
+    const gaps = gap * (rows.length - 1);
+    const sumH = heights.reduce((a, b) => a + b, 0);
+    const scale = Math.min(1, Math.max(0, H - gaps) / sumH);
     const finalH = heights.map(h => h * scale);
+    const total = sumH * scale + gaps;
 
     let minArea = Infinity;
     rows.forEach((row, i) => row.forEach(idx => {
@@ -266,7 +289,7 @@ function packRows(aspects, W, H, gap = TILE_GAP) {
     // берём раскладку, где самая мелкая плитка крупнее всего — так никто
     // не оказывается в «щели», пока сосед занимает пол-экрана
     if (!best || minArea > best.minArea) {
-      best = { rows, heights: finalH, minArea, total: total * scale };
+      best = { rows, heights: finalH, minArea, total };
     }
   }
   return best;
@@ -278,10 +301,15 @@ function RemoteAudio({ participant, volume = 1, localMuted = false }) {
 
   useEffect(() => {
     if (!participant) return;
+    // Элемент запоминаем сейчас: к моменту уборки ref уже может указывать
+    // на другой узел, и отвязали бы мы не то.
+    const el = audioRef.current;
+    let attached = null;
     const attach = () => {
       const audioPub = participant.getTrackPublication(Track.Source.Microphone);
-      if (audioPub?.track && audioPub.isSubscribed && audioRef.current) {
-        audioPub.track.attach(audioRef.current);
+      if (audioPub?.track && audioPub.isSubscribed && el) {
+        audioPub.track.attach(el);
+        attached = audioPub.track;
       }
     };
     attach();
@@ -290,6 +318,9 @@ function RemoteAudio({ participant, volume = 1, localMuted = false }) {
     return () => {
       participant.off('trackSubscribed', attach);
       participant.off('trackPublished', attach);
+      // Без отвязки трек продолжал держать ссылку на удалённый из DOM
+      // элемент, и за долгий звонок с перезаходами их копилось много.
+      if (attached && el) { try { attached.detach(el); } catch { /* трек уже мёртв */ } }
     };
   }, [participant]);
 
@@ -354,7 +385,7 @@ function ScreenShareTile({ participant, isLocal }) {
 }
 
 // --- Single participant tile ---
-function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMuted, onToggleMute, backdrop, gridSpan, onMeta }) {
+function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMuted, onToggleMute, backdrop, gridSpan, onMeta, onClick }) {
   const videoRef = useRef(null);
   const backdropRef = useRef(null);
   const [hasVideo, setHasVideo] = useState(false);
@@ -471,8 +502,9 @@ function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMute
 
   return (
     <div
-      className={`participant-tile${small ? ' participant-tile--small' : ''}${isSpeaking ? ' participant-tile--speaking' : ''}`}
+      className={`participant-tile${small ? ' participant-tile--small' : ''}${isSpeaking ? ' participant-tile--speaking' : ''}${onClick ? ' participant-tile--tappable' : ''}`}
       style={{ ...(videoAspect ? { '--tile-aspect': videoAspect } : null), ...gridSpan }}
+      onClick={onClick}
     >
       {backdrop && (
         <video ref={backdropRef} className="tile-backdrop" autoPlay playsInline muted
@@ -544,6 +576,9 @@ export default function App() {
   );
 
   const [joined, setJoined] = useState(false);
+  const joinedRef = useRef(false);              // для обработчиков сокета
+  const joinPayloadRef = useRef(null);          // чем повторно войти после реконнекта
+  joinedRef.current = joined;
   const [status, setStatus] = useState('Готов к подключению');
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
@@ -559,6 +594,7 @@ export default function App() {
   const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false);
   const [accountTab, setAccountTab] = useState('profile');
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const chatOpenRef = useRef(false);   // обработчик сокета не видит свежее состояние
   const [isScreenFullscreen, setIsScreenFullscreen] = useState(false);
 
   const [callHistory, setCallHistory] = useState([]);
@@ -618,16 +654,27 @@ export default function App() {
   // «в звонке», а получатель жил в отдельной переменной, и стороны расходились.
   // { role:'out'|'in', callId, peer, peerName, roomSlug, inviteKey, phase:'ringing'|'connecting' }
   const [call, setCall] = useState(null);
+  // Обработчики сокета регистрируются один раз и не видят свежий call.
+  // Им нужна актуальная копия: иначе решения принимаются по состоянию
+  // первого рендера.
+  const callRef = useRef(null);
+  callRef.current = call;
   const [callNotice, setCallNotice] = useState('');   // «Отклонён», «Занят» и т.п.
   const [callLeft, setCallLeft] = useState(0);        // сколько секунд осталось звонить
   // Доступ к камере и микрофону отклонён: iOS не даёт спросить повторно,
   // вернуть можно только в настройках системы — объясняем это пользователю.
   const [mediaBlocked, setMediaBlocked] = useState(false);
-  const [knockRequest, setKnockRequest] = useState(null); // { username, name, roomId } — у владельца
+  // Очередь стучащихся у владельца. Раньше здесь лежал один запрос, и когда
+  // просились несколько человек, каждый следующий затирал предыдущего: те,
+  // кого затёрло, ждали до таймаута, хотя владелец был на месте.
+  const [knockQueue, setKnockQueue] = useState([]);       // [{ username, name, roomId }]
+  const knockRequest = knockQueue[0] || null;
+  const dropKnock = () => setKnockQueue(prev => prev.slice(1));
   const [knocking, setKnocking] = useState(false);        // мы ждём, когда впустят
   // Комната ожидания
   const [waitingForHost, setWaitingForHost] = useState(false);       // мы в приёмной
   const waitingRetryRef = useRef(null);                              // { slug, key } для повтора
+  const waitTimeoutRef = useRef(null);                               // чтобы приёмная не висела вечно
   const [waitingList, setWaitingList] = useState([]);                // у ведущего: [{socketId, name, userId}]
   const knockTimerRef = useRef(null);
   const [isParticipantsOpen, setIsParticipantsOpen] = useState(false);
@@ -1320,10 +1367,16 @@ export default function App() {
   const kickParticipant = async (identity) => {
     const token = localStorage.getItem('token');
     try {
-      await fetch(`${SERVER_URL}/rooms/moderate`, {
+      // Раньше ответ сервера не проверялся: при отказе (не владелец комнаты)
+      // человек всё равно видел «удалён», а участник оставался в звонке.
+      const resp = await fetch(`${SERVER_URL}/rooms/moderate`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ roomId: roomIdRef.current, targetIdentity: identity, action: 'remove' }),
       });
+      if (!resp.ok) {
+        setStatus(resp.status === 403 ? 'Удалять участников может только владелец комнаты' : 'Не удалось удалить участника');
+        return;
+      }
       setStatus('Участник удалён из звонка');
     } catch { setStatus('Не удалось удалить участника'); }
   };
@@ -1571,7 +1624,14 @@ export default function App() {
     if (call?.phase !== 'ringing') { setCallLeft(0); return; }
     setCallLeft(45);
     const id = setInterval(() => setCallLeft(s => (s > 0 ? s - 1 : 0)), 1000);
-    return () => clearInterval(id);
+    // Отсчёт был чисто декоративным: если сервер перезапустился посреди
+    // дозвона, его call-ended уже не придёт, и экран «Вызов... 0 с» висел
+    // вечно. Через пять секунд после нуля закрываем сами.
+    const stop = setTimeout(() => {
+      setCall(null);
+      setCallNotice('Не ответили');
+    }, 50000);
+    return () => { clearInterval(id); clearTimeout(stop); };
   }, [call?.callId, call?.phase]);
 
   // Гудки и вибрация. Без звука входящий звонок просто пропускают.
@@ -1589,14 +1649,14 @@ export default function App() {
   const acceptCall = async () => {
     const c = call;
     if (!c || c.role !== 'in') return;
+    // В комнату входим не здесь, а по разрешению сервера (call-accept-ok).
+    // Раньше клиент входил сразу, и при ответе с двух устройств оба
+    // оказывались в комнате: отказ приходил уже после входа.
     socket.emit('call-accept', { callId: c.callId });
     // Обязательно выйти из текущего звонка: иначе микрофон остаётся в старой
     // комнате и прежние собеседники продолжают нас слышать.
     if (joined) await leaveCall();
     setCall({ ...c, phase: 'connecting' });
-    inviteKeyRef.current = c.inviteKey;
-    setRoomId(c.roomSlug);
-    joinRoomWith(c.roomSlug, c.inviteKey);
   };
 
   const declineCall = () => {
@@ -1656,7 +1716,7 @@ export default function App() {
       });
       addAction(`✅ ${knockRequest.name || knockRequest.username} впущен в комнату`);
     } catch {}
-    setKnockRequest(null);
+    dropKnock();
   };
 
   // Action messages (join/leave/applause) — auto-disappear after 4s
@@ -1678,6 +1738,9 @@ export default function App() {
   useEffect(() => {
     socket.on('chat-message', (message) => {
       setMessages(prev => [...prev, message]);
+      // Значок на кнопке чата показывал общее число сообщений и никогда не
+      // гас: считаем именно непрочитанные, пока панель закрыта.
+      if (!chatOpenRef.current) setChatUnread(n => n + 1);
     });
 
     socket.on('sound', ({ soundId, fromUser, toUser }) => {
@@ -1692,8 +1755,11 @@ export default function App() {
       if (audio) { audio.currentTime = 0; audio.play().catch(() => {}); }
     });
 
+    // Лимит был декоративным: одиннадцатый уже входил в звонок с камерой и
+    // микрофоном, а надпись только меняла текст статуса. Теперь выводим.
     socket.on('room-full', () => {
-      setStatus('Комната заполнена — максимум 10 участников');
+      setCallNotice('В звонке уже 10 участников, больше комната не вмещает');
+      leaveCallRef.current?.();
     });
 
     socket.on('call-incoming', (c) => {
@@ -1704,17 +1770,29 @@ export default function App() {
       });
     });
     socket.on('call-ringing', ({ callId }) => setCall(p => (p ? { ...p, callId } : p)));
-    socket.on('call-accepted', ({ roomSlug, inviteKey }) => {
+    // Собеседник принял: входим в комнату. Проверка callRef обязательна —
+    // человек мог нажать «Отменить» в ту же секунду, и без неё его затягивало
+    // в разговор, от которого он только что отказался.
+    socket.on('call-accepted', ({ callId, roomSlug, inviteKey }) => {
+      const cur = callRef.current;
+      if (!cur || cur.role !== 'out' || (cur.callId && callId && cur.callId !== callId)) return;
       setCall(p => (p ? { ...p, phase: 'connecting' } : p));
       inviteKeyRef.current = inviteKey;
       setRoomId(roomSlug);
-      joinRoomWithRef.current?.(roomSlug, inviteKey);
+      joinRoomWithRef.current?.(roomSlug, inviteKey, { direct: true });
+    });
+    // Сервер разрешил нам принять звонок — только теперь входим
+    socket.on('call-accept-ok', ({ roomSlug, inviteKey }) => {
+      inviteKeyRef.current = inviteKey;
+      setRoomId(roomSlug);
+      joinRoomWithRef.current?.(roomSlug, inviteKey, { direct: true });
     });
     socket.on('call-ended', ({ reason }) => {
       setCall(null);
       setCallNotice(CALL_END_TEXT[reason] || 'Звонок завершён');
     });
-    socket.on('knock', (req) => setKnockRequest(req));
+    socket.on('knock', (req) => setKnockQueue(prev =>
+      prev.some(r => r.username === req.username && r.roomId === req.roomId) ? prev : [...prev, req]));
 
     socket.on('recording-state', ({ active, by }) => {
       setRecActive(active);
@@ -1731,10 +1809,13 @@ export default function App() {
     socket.on('wait-knock', (req) => setWaitingList(prev => prev.some(w => w.socketId === req.socketId) ? prev : [...prev, req]));
     socket.on('wait-admitted', () => {
       const r = waitingRetryRef.current;
+      clearTimeout(waitTimeoutRef.current);
       setWaitingForHost(false);
-      if (r) { setStatus('Вас впустили — подключаемся…'); joinRoomWith(r.slug, r.key); }
+      // прямой вызов брал версию функции с первого рендера, без имени и токена
+      if (r) { setStatus('Вас впустили — подключаемся…'); joinRoomWithRef.current?.(r.slug, r.key); }
     });
     socket.on('wait-denied', () => {
+      clearTimeout(waitTimeoutRef.current);
       setWaitingForHost(false);
       waitingRetryRef.current = null;
       setStatus('Ведущий отклонил ваш вход');
@@ -1752,6 +1833,7 @@ export default function App() {
       socket.off('call-incoming');
       socket.off('call-ringing');
       socket.off('call-accepted');
+      socket.off('call-accept-ok');
       socket.off('call-ended');
       socket.off('knock');
     };
@@ -1760,11 +1842,30 @@ export default function App() {
   // Сообщаем серверу, кто мы — для входящих звонков (и после переподключений)
   useEffect(() => {
     if (!authUser?.username) return;
-    const announce = () => socket.emit('presence', { username: authUser.username });
+    // Ник сервер достаёт из токена сам: назваться чужим именем нельзя
+    const announce = () => socket.emit('presence', { token: localStorage.getItem('token') });
     announce();
+    // Сервер не принял токен: сессия истекла, входящие звонки приходить
+    // перестанут. Раньше это происходило беззвучно.
+    const rejected = () => setCallNotice('Сессия истекла. Войдите в аккаунт заново, иначе звонки не будут доходить');
     socket.on('connect', announce);
-    return () => socket.off('connect', announce);
+    socket.on('presence-rejected', rejected);
+    return () => { socket.off('connect', announce); socket.off('presence-rejected', rejected); };
   }, [authUser]);
+
+  // Переподключение сокета — это новый сокет с пустым состоянием на сервере.
+  // Раньше заново отправлялся только presence, а вход в комнату нет: у
+  // человека после смены Wi-Fi на мобильный интернет молча отваливались чат
+  // и реакции, а сервер переставал считать его занятым и пропускал к нему
+  // новые звонки прямо посреди разговора.
+  useEffect(() => {
+    const rejoin = () => {
+      const p = joinPayloadRef.current;
+      if (p && joinedRef.current) socket.emit('join-room', p);
+    };
+    socket.on('connect', rejoin);
+    return () => socket.off('connect', rejoin);
+  }, []);
 
   // Persist and apply volumes
   useEffect(() => { localStorage.setItem('vol_master', masterVolume); }, [masterVolume]);
@@ -1781,12 +1882,17 @@ export default function App() {
     });
   }, [applauseVolume, masterVolume]);
 
-  // Chat scroll
+  // Прокрутка чата вниз. Раньше зависела только от сообщений, поэтому панель,
+  // открытая после прихода сообщений, показывала самые старые: её DOM
+  // монтируется заново и приходит со scrollTop = 0.
   useEffect(() => {
+    chatOpenRef.current = isChatOpen;
+    if (!isChatOpen) return;
+    setChatUnread(0);
     if (chatBodyRef.current) {
       chatBodyRef.current.scrollTop = chatBodyRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, isChatOpen]);
 
   // Timer
   useEffect(() => {
@@ -1826,13 +1932,21 @@ export default function App() {
   // joinRoomWith держим в ref: иначе при ответе на звонок сработает версия
   // с первого рендера — с пустым именем и без авторизации.
   const joinRoomWithRef = useRef(null);
+  const leaveCallRef = useRef(null);
+  // Звонок контакту и комната по ссылке ведут себя по-разному, когда второй
+  // участник уходит: из звонка выкидывает, в комнате остаёмся ждать людей.
+  const directCallRef = useRef(false);
 
-  const joinRoomWith = async (slug, key) => {
+  const joinRoomWith = async (slug, key, opts = {}) => {
     // пустые поля — объясняем, а не молчим
     if (!slug) { setStatus('Введите ID комнаты'); return; }
     // гость мог нажать «Пропустить» — тогда имя присвоит сервер («Гость N»)
     if (!guestMode && !userName.trim()) { setStatus('Введите ваше имя'); return; }
     if (joined || joiningRef.current) return;
+    // Только после проверок: событие call-accepted приходит на все вкладки
+    // аккаунта, и вкладка, уже сидящая в обычной комнате, помечала себя как
+    // звонок один на один. Её потом выкидывало при уходе любого участника.
+    directCallRef.current = Boolean(opts.direct);
     if (slug !== roomId) setRoomId(slug);
     joiningRef.current = true;
     setStatus('Получаем токен...');
@@ -1890,6 +2004,14 @@ export default function App() {
         waitingRetryRef.current = { slug, key };
         setWaitingForHost(true);
         setStatus('Ожидаем, пока ведущий впустит вас…');
+        // Ведущий может просто не открыть приложение. Раньше спиннер крутился
+        // бесконечно, и человек не понимал, ждать ему или уходить.
+        clearTimeout(waitTimeoutRef.current);
+        waitTimeoutRef.current = setTimeout(() => {
+          setWaitingForHost(false);
+          waitingRetryRef.current = null;
+          setStatus('Ведущий не ответил за две минуты. Попробуйте позже или свяжитесь с ним напрямую');
+        }, 120000);
         socket.emit('wait-knock', {
           roomId: slug,
           name: userName.trim(),
@@ -1935,9 +2057,16 @@ export default function App() {
           sampleRate: 48000,
         },
         publishDefaults: {
-          simulcast: false,
+          // Simulcast обязателен в групповых звонках. Без него мы публикуем
+          // один слой 360p, и adaptiveStream не из чего выбирать: миниатюра
+          // 74 пикселя в ленте получает ровно тот же поток, что и главное
+          // видео на весь экран. На звонке вдесятером это девять полных
+          // декодеров на телефоне и, как следствие, нагрев и разряд.
+          simulcast: true,
           videoEncoding: { maxBitrate: 400_000, maxFramerate: 15 },
-          videoSimulcastLayers: [],
+          videoSimulcastLayers: [
+            { width: 320, height: 180, encoding: { maxBitrate: 120_000, maxFramerate: 12 } },
+          ],
           // аудио: битрейт выше дефолтного (чище речь), без DTX (не режет тихую речь),
           // RED — устойчивость к потере пакетов
           audioPreset: { maxBitrate: 48_000 },
@@ -1970,9 +2099,26 @@ export default function App() {
         setCallStartedAt(null);
         setCallSeconds(0);
         livekitRoomRef.current = null;
-        setStatus('Отключено');
+        // Обрыв медиа-соединения — тоже выход из комнаты. Без этого сокет
+        // с сервером остаётся жив, сервер продолжает считать человека
+        // занятым, и входящие звонки ему отбиваются как «занято».
+        socket.emit('leave-room', roomIdRef.current);
+        directCallRef.current = false;
+        setMessages([]);
+        setChatUnread(0);
+        setWaitingList([]);
+        setKnockQueue([]);
+        setRecActive(false);
+        setRecStartedBy(null);
+        setIsSharingScreen(false);
+        setIsScreenFullscreen(false);
+        setSelfBig(false);
+        setStatus('Связь прервана');
         forceUpdate();
       });
+      // Пока LiveKit сам восстанавливает связь, картинка замирала молча
+      room.on(RoomEvent.Reconnecting, () => setStatus('Восстанавливаем связь...'));
+      room.on(RoomEvent.Reconnected, () => setStatus('Связь восстановлена'));
 
       room.on(RoomEvent.ParticipantConnected, (p) => {
         setStatus(`${displayName(p)} подключился`);
@@ -1984,10 +2130,23 @@ export default function App() {
         setStatus(`${displayName(p)} отключился`);
         playChime(false);
         forceUpdate();
+        // Звонок один на один: собеседник ушёл — разговаривать больше не с кем,
+        // держать человека в пустой комнате незачем. В комнате по ссылке
+        // остаёмся: туда люди заходят и выходят по ходу встречи.
+        if (directCallRef.current && room.remoteParticipants.size === 0) {
+          setCallNotice(`${displayName(p)} завершил звонок`);
+          leaveCallRef.current?.();
+        }
       });
 
       // подсветка говорящих + своё качество соединения
-      room.on(RoomEvent.ActiveSpeakersChanged, forceUpdate);
+      room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+        // Запоминаем последнего говорившего не из числа своих: по нему режим
+        // «главный + лента» выбирает, кого показать крупно.
+        const s = (speakers || []).find(p => p !== room.localParticipant);
+        if (s) setLastSpeakerId(s.identity);
+        forceUpdate();
+      });
       room.on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
         if (participant === room.localParticipant) {
           setConnQuality(
@@ -2065,7 +2224,9 @@ export default function App() {
       }
       forceUpdate();
 
-      socket.emit('join-room', { roomId: slug, userName: userName.trim(), userId: authUser?.id });
+      const joinPayload = { roomId: slug, userName: userName.trim(), userId: authUser?.id };
+      socket.emit('join-room', joinPayload);
+      joinPayloadRef.current = joinPayload;
       checkRecordingStatus(slug);
 
     } catch (error) {
@@ -2077,6 +2238,11 @@ export default function App() {
       livekitRoomRef.current = null;
       if (dead) { try { dead.removeAllListeners(); await dead.disconnect(); } catch { /* уже мёртвая */ } }
       joiningRef.current = false;
+      // Звонок принят, а войти не вышло. Сервер о звонке уже забыл и
+      // call-ended не пришлёт, поэтому экран «Соединяем» висел бы вечно,
+      // и следующий звонок молча блокировался проверкой на активный.
+      setCall(null);
+      setCallNotice('Не удалось войти в звонок. Попробуйте ещё раз');
     }
   };
 
@@ -2091,6 +2257,7 @@ export default function App() {
       await room.disconnect();
     }
     socket.emit('leave-room', roomIdRef.current);
+    joinPayloadRef.current = null;
     setJoined(false);
     setRecActive(false);
     setRecStartedBy(null);
@@ -2105,8 +2272,26 @@ export default function App() {
     setCallSeconds(0);
     setMessages([]);
     setIsFrontCamera(true);
+    directCallRef.current = false;
+    // Всё, что относится к прошлой комнате, должно уйти вместе с ней:
+    // иначе следующий вход начинался с чужими заглушёнными участниками,
+    // открытым во весь экран показом и уже увеличенным своим окном.
+    setMutedUsers(new Set());
+    setChatUnread(0);
+    setTileAspect({});
+    setPinnedId(null);
+    setSelfBig(false);
+    setSelfPos(null);
+    setIsScreenFullscreen(false);
+    setWaitingList([]);
+    // Заявки на вход привязаны к socketId и к конкретной комнате. Оставшись
+    // от прошлой комнаты, они висели живыми кнопками: «Впустить» молча
+    // ничего не делал, а стук из старой комнаты показывался поверх новой.
+    setKnockQueue([]);
     forceUpdate();
   };
+  // ссылка нужна обработчикам комнаты: они регистрируются раньше объявления
+  leaveCallRef.current = leaveCall;
 
   const toggleMute = async () => {
     const room = livekitRoomRef.current;
@@ -2288,41 +2473,64 @@ export default function App() {
     return () => mq.removeEventListener?.('change', update);
   }, []);
 
-  const PIP_MARGIN = 12;
-  const SELF_W = 104, SELF_H = 148;
+  // Размер окна зависит от пропорции камеры и меняется на лету, поэтому
+  // перетаскивание берёт его из ref, а не из замыкания рендера.
+  const selfSizeRef = useRef({ w: 88, h: SELF_LONG });
+  const selfCorner = (r, size) => ({
+    x: Math.max(PIP_MARGIN, r.width - size.w - PIP_MARGIN),
+    y: Math.max(PIP_MARGIN, r.height - size.h - 150),
+  });
   // Перетаскивание своего окна. Тап отличаем от перетаскивания по смещению:
   // сдвинули меньше пяти пикселей — считаем тапом и увеличиваем окно.
+  const selfDragIdRef = useRef(null);
   const onSelfPointerDown = (e) => {
     if (selfBig) return;                       // увеличенное окно не таскаем
+    // Второй палец на том же окне заводил вторую сессию перетаскивания:
+    // обе писали в одну позицию из разных точек отсчёта, и окно дёргалось.
+    if (selfDragIdRef.current !== null) return;
     e.stopPropagation();
     const el = stageRef.current;
     if (!el) return;
+    selfDragIdRef.current = e.pointerId;
     const r = el.getBoundingClientRect();
-    const base = selfPos || { x: r.width - SELF_W - PIP_MARGIN, y: r.height - SELF_H - 150 };
+    const size = selfSizeRef.current;
+    const base = selfPos || selfCorner(r, size);
     const start = { x: e.clientX, y: e.clientY, ox: base.x, oy: base.y, moved: false };
     setSelfDragging(true);
-    const clampX = v => Math.min(Math.max(PIP_MARGIN, v), r.width - SELF_W - PIP_MARGIN);
-    const clampY = v => Math.min(Math.max(PIP_MARGIN, v), r.height - SELF_H - PIP_MARGIN);
+    const clampX = v => Math.min(Math.max(PIP_MARGIN, v), Math.max(PIP_MARGIN, r.width - size.w - PIP_MARGIN));
+    const clampY = v => Math.min(Math.max(PIP_MARGIN, v), Math.max(PIP_MARGIN, r.height - size.h - PIP_MARGIN));
     const move = (ev) => {
+      if (ev.pointerId !== selfDragIdRef.current) return;
       const dx = ev.clientX - start.x, dy = ev.clientY - start.y;
       if (Math.abs(dx) > 5 || Math.abs(dy) > 5) start.moved = true;
       setSelfPos({ x: clampX(start.ox + dx), y: clampY(start.oy + dy) });
     };
-    const up = (ev) => {
+    // Системный жест (входящий звонок, свайп от края) шлёт pointercancel
+    // вместо pointerup. Без него окно навсегда оставалось «в перетаскивании»,
+    // без анимаций, а слушатели копились на window с каждым таким жестом.
+    const finish = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      selfDragIdRef.current = null;
       setSelfDragging(false);
+    };
+    const cancel = (ev) => { if (ev.pointerId === selfDragIdRef.current) finish(); };
+    const up = (ev) => {
+      if (ev.pointerId !== selfDragIdRef.current) return;
+      finish();
       if (!start.moved) { setSelfBig(true); return; }
       // после отпускания прилипаем к ближайшему углу
       const lx = clampX(start.ox + (ev.clientX - start.x));
       const ly = clampY(start.oy + (ev.clientY - start.y));
       setSelfPos({
-        x: lx < (r.width - SELF_W) / 2 ? PIP_MARGIN : r.width - SELF_W - PIP_MARGIN,
-        y: ly < (r.height - SELF_H) / 2 ? PIP_MARGIN : r.height - SELF_H - PIP_MARGIN,
+        x: lx < (r.width - size.w) / 2 ? PIP_MARGIN : Math.max(PIP_MARGIN, r.width - size.w - PIP_MARGIN),
+        y: ly < (r.height - size.h) / 2 ? PIP_MARGIN : Math.max(PIP_MARGIN, r.height - size.h - PIP_MARGIN),
       });
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
   };
 
   // ── Раскладка участников ──
@@ -2349,10 +2557,27 @@ export default function App() {
   }, [joined]);
 
   const [pinnedId, setPinnedId] = useState(null);
+  const [lastSpeakerId, setLastSpeakerId] = useState(null);
+  const [chatUnread, setChatUnread] = useState(0);
   const [selfBig, setSelfBig] = useState(false);   // своё видео увеличено втрое
+  // Где живёт своя камера на телефоне: 'pip' — плавающее окно, 'grid' — сетка
+  const [selfMode, setSelfMode] = useState(() => {
+    try { return localStorage.getItem(SELF_MODE_KEY) === 'grid' ? 'grid' : 'pip'; } catch { return 'pip'; }
+  });
+  const switchSelfMode = (mode) => {
+    setSelfMode(mode);
+    setSelfBig(false);
+    try { localStorage.setItem(SELF_MODE_KEY, mode); } catch { /* приватный режим */ }
+  };
+  // Закрепление снимаем и когда человек вышел, и когда он выключил камеру:
+  // иначе главным молча становился кто-то другой, а плашка продолжала
+  // показывать имя закреплённого.
   useEffect(() => {
-    if (pinnedId && !allParticipants.some(p => p.identity === pinnedId)) setPinnedId(null);
-  }, [allParticipants, pinnedId]);
+    if (!pinnedId) return;
+    const p = allParticipants.find(x => x.identity === pinnedId);
+    const camOn = p && Boolean(p.getTrackPublication(Track.Source.Camera)) && !p.getTrackPublication(Track.Source.Camera).isMuted;
+    if (!p || !camOn) setPinnedId(null);
+  }, [allParticipants, pinnedId, renderTick]);
 
   // Пропорции потоков приходят от плиток: их можно узнать только измерив видео
   const [tileAspect, setTileAspect] = useState({});
@@ -2362,8 +2587,14 @@ export default function App() {
   }, []);
 
   const localP = livekitRoomRef.current?.localParticipant;
-  // Своё видео живёт в плавающем окне и в сетку не попадает никогда
   const remotes = allParticipants.filter(p => p !== localP);
+  // На компьютере своё видео всегда часть общей сетки: плавающего окна там
+  // нет вовсе. На телефоне место своей камеры выбирает человек, и выбор
+  // держится между звонками.
+  const selfInGrid = !isTouchDevice || selfMode === 'grid';
+  // Себя ставим в конец: когда своё видео уходит в плавающее окно и
+  // возвращается, остальные не должны прыгать по сетке.
+  const gridSource = selfInGrid && localP ? [...remotes, localP] : remotes;
   // Камера включена — это факт публикации у собеседника, и только он. Раньше
   // об этом сообщала сама плитка, и получался замкнутый круг: пока поток не
   // подписан, плитка говорила «камеры нет», её убирали из сетки, видеоэлемент
@@ -2375,21 +2606,37 @@ export default function App() {
   };
   // Выключенная камера уходит из сетки вниз маленьким квадратом: она не
   // должна отнимать место у тех, кого действительно видно
-  const visible = remotes.filter(hasCameraOn);
-  const cameraOff = remotes.filter(p => !hasCameraOn(p));
+  const visible = gridSource.filter(hasCameraOn);
+  const cameraOff = gridSource.filter(p => !hasCameraOn(p));
 
   // «Главный + лента» — только на телефоне и только когда людей много
-  const speakerMode = (isTouchDevice && visible.length >= SPEAKER_FROM) || Boolean(pinnedId);
+  // Закрепление снимается эффектом, то есть уже после рендера. Если
+  // закреплённый был единственным видимым и выключил камеру, в этом кадре
+  // speakerMode ещё включён, а показывать некого: экран падал на undefined.
+  const speakerMode = visible.length > 0
+    && ((isTouchDevice && visible.length >= SPEAKER_FROM) || Boolean(pinnedId));
+  // Крупно показываем закреплённого, иначе последнего говорившего. Раньше
+  // тут был visible[0], то есть первый вошедший: он висел главным весь
+  // звонок, даже если молчал, а говорящий сидел мелкой миниатюрой в ленте.
   const mainParticipant = speakerMode
-    ? (visible.find(p => p.identity === pinnedId) || visible[0])
+    ? (visible.find(p => p.identity === pinnedId)
+       || visible.find(p => p.identity === lastSpeakerId)
+       || visible[0])
     : null;
   const stripParticipants = speakerMode ? visible.filter(p => p !== mainParticipant) : [];
 
   const offRowH = cameraOff.length ? 64 + TILE_GAP : 0;
-  const pack = packRows(
-    visible.map(p => tileAspect[p.identity] || DEFAULT_ASPECT),
-    stageSize.w,
-    Math.max(stageSize.h - offRowH, 80),
+  // Перебор раскладок стоит 2^(n-1) вариантов, а таймер звонка перерисовывает
+  // весь экран раз в секунду. Без мемоизации при десяти участниках это 512
+  // вариантов каждую секунду впустую: набор пропорций-то не менялся.
+  const packKey = visible.map(p => (tileAspect[p.identity] || DEFAULT_ASPECT).toFixed(4)).join(',');
+  const pack = useMemo(
+    () => packRows(
+      packKey ? packKey.split(',').map(Number) : [],
+      stageSize.w,
+      Math.max(stageSize.h - offRowH, 80),
+    ),
+    [packKey, stageSize.w, stageSize.h, offRowH],
   );
 
   // Find participant with active screen share
@@ -2401,16 +2648,51 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allParticipants, renderTick]);
 
-  // Позиция своего окна хранится в пикселях. При повороте экрана сцена
-  // меняет размеры, и старые координаты уводили окно за границу — оно
-  // просто пропадало из виду. Поэтому возвращаем его в видимую область.
+  // ── Геометрия своего окна ──
+  // Размер и положение считаются здесь, а не в CSS. Иначе свёрнутое окно
+  // жило на right/bottom, увеличенное — на transform, и при закрытии оно
+  // прыгало между системами координат: то самое дёрганье.
+  const selfAspect = (localP && tileAspect[localP.identity]) || DEFAULT_ASPECT;
+  const selfSize = selfAspect >= 1
+    ? { w: SELF_LONG, h: Math.round(SELF_LONG / selfAspect) }
+    : { w: Math.round(SELF_LONG * selfAspect), h: SELF_LONG };
+  selfSizeRef.current = selfSize;
+
+  // Увеличенное окно: втрое больше, но всегда с полями по краям и с местом
+  // под панель кнопок снизу.
+  const selfBigSize = (() => {
+    const W = stageSize.w || 360, H = stageSize.h || 640;
+    // Нижняя отсечка обязательна: во время поворота экрана ResizeObserver
+    // успевает прислать почти нулевую ширину, и без неё размеры уходили в
+    // минус, а окно схлопывалось в точку.
+    let w = Math.max(80, Math.min(selfSize.w * SELF_ZOOM, W - 48));
+    let h = w / selfAspect;
+    const maxH = Math.max(120, H - 190);
+    if (h > maxH) { h = maxH; w = h * selfAspect; }
+    return { w: Math.round(w), h: Math.round(h) };
+  })();
+
+  const selfBox = selfBig
+    ? {
+        ...selfBigSize,
+        x: Math.round(((stageSize.w || 360) - selfBigSize.w) / 2),
+        y: Math.max(PIP_MARGIN, Math.round(((stageSize.h || 640) - selfBigSize.h) / 2 - 24)),
+      }
+    : {
+        ...selfSize,
+        ...(selfPos || selfCorner({ width: stageSize.w || 360, height: stageSize.h || 640 }, selfSize)),
+      };
+
+  // При повороте экрана сцена меняет размеры, и старые координаты уводили
+  // окно за границу — оно просто пропадало из виду. Возвращаем его внутрь.
   useEffect(() => {
     if (!selfPos || !stageSize.w || !stageSize.h) return;
-    const x = Math.min(Math.max(PIP_MARGIN, selfPos.x), Math.max(PIP_MARGIN, stageSize.w - SELF_W - PIP_MARGIN));
-    const y = Math.min(Math.max(PIP_MARGIN, selfPos.y), Math.max(PIP_MARGIN, stageSize.h - SELF_H - PIP_MARGIN));
+    const { w, h } = selfSizeRef.current;
+    const x = Math.min(Math.max(PIP_MARGIN, selfPos.x), Math.max(PIP_MARGIN, stageSize.w - w - PIP_MARGIN));
+    const y = Math.min(Math.max(PIP_MARGIN, selfPos.y), Math.max(PIP_MARGIN, stageSize.h - h - PIP_MARGIN));
     if (x !== selfPos.x || y !== selfPos.y) setSelfPos({ x, y });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageSize.w, stageSize.h]);
+  }, [stageSize.w, stageSize.h, selfSize.w, selfSize.h]);
 
   if (!authChecked) return <div className="auth-page">Проверяем авторизацию...</div>;
 
@@ -2649,7 +2931,7 @@ export default function App() {
           <div className="call-popup-from">{knockRequest.name || knockRequest.username} просится в комнату</div>
           <div className="call-popup-actions">
             <button className="primary-btn" onClick={approveKnock}>Впустить</button>
-            <button className="ghost-btn" onClick={() => setKnockRequest(null)}>Игнорировать</button>
+            <button className="ghost-btn" onClick={dropKnock}>Игнорировать</button>
           </div>
         </div>
       )}
@@ -3911,7 +4193,7 @@ export default function App() {
           </div>
 
           {/* Video area — full window; тап (телефон) показывает/прячет управление */}
-          <div ref={stageRef} className={`video-stage${isScreenFullscreen ? ' video-stage--fs' : ''}`} onClick={isTouchDevice ? onStageTap : undefined}>
+          <div ref={stageRef} className={`video-stage${isScreenFullscreen ? ' video-stage--fs' : ''}${selfBig ? ' video-stage--selfbig' : ''}`} onClick={isTouchDevice ? onStageTap : undefined}>
             {screenSharePresenter ? (
               <div className="presenter-layout">
                 <ScreenShareTile
@@ -3973,8 +4255,9 @@ export default function App() {
                   <ParticipantTile
                     key={mainParticipant.identity}
                     participant={mainParticipant}
+                    isLocal={mainParticipant === localP}
                     isFrontCamera={isFrontCamera}
-                    localMuted={mutedUsers.has(mainParticipant.identity)}
+                    localMuted={mainParticipant !== localP && mutedUsers.has(mainParticipant.identity)}
                     onToggleMute={() => toggleUserMute(mainParticipant.identity)}
                     onMeta={onTileMeta}
                   />
@@ -3985,15 +4268,30 @@ export default function App() {
                   )}
                 </div>
                 <div className="speaker-strip">
-                  {stripParticipants.map(p => (
-                    <button
-                      key={p.identity}
-                      className="speaker-thumb"
-                      onClick={(e) => { e.stopPropagation(); setPinnedId(p.identity); }}
-                      aria-label={`Показать крупно: ${displayName(p)}`}
-                    >
-                      <ParticipantTile participant={p} isFrontCamera={isFrontCamera} onMeta={onTileMeta} />
-                    </button>
+                  {stripParticipants.map(p => {
+                    // По своей миниатюре тап увеличивает окно, а не закрепляет:
+                    // закреплять самого себя главным незачем
+                    const isSelf = p === localP;
+                    return (
+                      <button
+                        key={p.identity}
+                        className="speaker-thumb"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isSelf) setSelfBig(true); else setPinnedId(p.identity);
+                        }}
+                        aria-label={isSelf ? 'Увеличить своё видео' : `Показать крупно: ${displayName(p)}`}
+                      >
+                        <ParticipantTile participant={p} isLocal={isSelf} isFrontCamera={isFrontCamera} onMeta={onTileMeta} />
+                      </button>
+                    );
+                  })}
+                  {/* Выключенные камеры не должны пропадать и здесь: раньше
+                      в этом режиме человек исчезал с экрана целиком */}
+                  {cameraOff.map(p => (
+                    <div className="off-chip off-chip--strip" key={p.identity} title={displayName(p)}>
+                      <span className="off-chip-letter">{(displayName(p) || '?')[0].toUpperCase()}</span>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -4001,21 +4299,61 @@ export default function App() {
               /* Рядная раскладка без обрезки: плитка принимает пропорцию
                  потока, ряд заполняет ширину, неполный ряд центрируется. */
               <div className="tile-rows">
+                {/* Один в звонке. Раньше это был просто чёрный экран, и
+                    человек не понимал, ждать ему или всё сломалось. */}
+                {visible.length === 0 && (
+                  <div className="stage-empty">
+                    {cameraOff.length === 0 ? (
+                      <>
+                        <div className="stage-empty-title">Пока вы здесь один</div>
+                        <div className="stage-empty-text">Отправьте ссылку тем, кого ждёте. Звонок уже идёт, входить заново не нужно.</div>
+                        <button
+                          className="stage-empty-btn"
+                          onClick={(e) => { e.stopPropagation(); copyRoomLink(); setStatus('Ссылка скопирована'); }}
+                        >
+                          <Icon name="link" size={16} /> Скопировать ссылку
+                        </button>
+                      </>
+                    ) : (
+                      /* Люди есть, но камер не видно. Раньше тут была чёрная
+                         пустота, и звонок выглядел зависшим. */
+                      <>
+                        <div className="stage-empty-title">Камеры выключены</div>
+                        <div className="stage-empty-text">
+                          {/* себя считаем отдельно: на компьютере своё видео
+                              тоже часть сетки и попадает в cameraOff */}
+                          {remotes.length === 0
+                            ? 'Ваша камера выключена. Включите её кнопкой снизу'
+                            : remotes.length === 1
+                              ? 'Собеседник вас слышит'
+                              : `В звонке ${remotes.length + 1}, все с выключенными камерами`}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 {pack && pack.rows.map((row, ri) => (
-                  <div className="tile-row" key={ri} style={{ height: Math.round(pack.heights[ri]) }}>
+                  <div className="tile-row" key={ri} style={{ height: Math.floor(pack.heights[ri]) }}>
                     {row.map(idx => {
                       const p = visible[idx];
                       const h = pack.heights[ri];
                       const a = tileAspect[p.identity] || DEFAULT_ASPECT;
+                      const isSelf = p === localP;
                       return (
                         <ParticipantTile
                           key={p.identity}
                           participant={p}
+                          isLocal={isSelf}
                           isFrontCamera={isFrontCamera}
-                          localMuted={mutedUsers.has(p.identity)}
+                          localMuted={!isSelf && mutedUsers.has(p.identity)}
                           onToggleMute={() => toggleUserMute(p.identity)}
                           onMeta={onTileMeta}
-                          gridSpan={{ width: Math.round(a * h), height: Math.round(h), flex: '0 0 auto' }}
+                          // Тап по своей плитке увеличивает её: там же лежит
+                          // кнопка возврата в плавающее окно
+                          onClick={isSelf && isTouchDevice
+                            ? (e) => { e.stopPropagation(); setSelfBig(true); }
+                            : undefined}
+                          gridSpan={{ width: Math.floor(a * h), height: Math.floor(h), flex: '0 0 auto' }}
                         />
                       );
                     })}
@@ -4036,18 +4374,32 @@ export default function App() {
               </div>
             )}
 
-            {/* Своё видео — всегда плавающее окно, в сетку не попадает.
-                Тап увеличивает втрое, фон за ним затемняется и размывается. */}
-            {localP && (
+            {/* Своё видео. На телефоне по умолчанию плавающее окно, на компе
+                оно всегда в общей сетке. Размер и положение задаются числами,
+                поэтому открытие и закрытие идут одной и той же анимацией. */}
+            {localP && (!selfInGrid || selfBig) && (
               <>
                 {selfBig && <div className="self-scrim" onClick={(e) => { e.stopPropagation(); setSelfBig(false); }} />}
                 <div
-                  className={`self-pip${selfBig ? ' self-pip--big' : ''}${selfDragging ? ' self-pip--drag' : ''}`}
-                  style={!selfBig && selfPos ? { left: selfPos.x, top: selfPos.y, right: 'auto', bottom: 'auto' } : undefined}
-                  onPointerDown={onSelfPointerDown}
+                  className={`self-pip${selfBig ? ' self-pip--big' : ''}${selfDragging ? ' self-pip--drag' : ''}${selfInGrid ? ' self-pip--enter' : ''}`}
+                  style={{ left: selfBox.x, top: selfBox.y, width: selfBox.w, height: selfBox.h }}
+                  onPointerDown={selfInGrid ? undefined : onSelfPointerDown}
                   onClick={(e) => { e.stopPropagation(); if (selfBig) setSelfBig(false); }}
                 >
                   <ParticipantTile participant={localP} isLocal isFrontCamera={isFrontCamera} onMeta={onTileMeta} />
+                  {/* Переключение места своей камеры — только на телефоне: на
+                      компьютере плавающего окна нет как такового. Кнопка
+                      живёт внутри окна: снаружи она уезжала под панель
+                      кнопок, а на низких экранах и вовсе за край. */}
+                  {selfBig && isTouchDevice && (
+                    <button
+                      className="self-mode-btn"
+                      onClick={(e) => { e.stopPropagation(); switchSelfMode(selfInGrid ? 'pip' : 'grid'); }}
+                    >
+                      <Icon name={selfInGrid ? 'collapse' : 'users'} size={16} />
+                      {selfInGrid ? 'Плавающее окно' : 'Добавить в сетку'}
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -4093,7 +4445,7 @@ export default function App() {
             </button>
             <button className={`ctrl-round ${isChatOpen ? 'ctrl-round--active' : ''}`} title="Чат" onClick={() => setIsChatOpen(p => !p)}>
               <Icon name="chat" size={22} />
-              {messages.length > 0 && <span className="ctrl-badge">{messages.length}</span>}
+              {chatUnread > 0 && <span className="ctrl-badge">{chatUnread}</span>}
             </button>
             <button className={`ctrl-round ${isSettingsOpen ? 'ctrl-round--active' : ''}`} title="Настройки" onClick={() => setIsSettingsOpen(p => !p)}>
               <Icon name="settings" size={22} />

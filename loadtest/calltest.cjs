@@ -1,14 +1,24 @@
 // Сквозная проверка сценариев звонка на живом сервере.
 // Поднимаем два сокет-клиента и прогоняем каждый случай отдельно.
+// ЗАПУСКАТЬ НА СЕРВЕРЕ, из /var/www/voyage/server: сервер берёт ник из токена,
+// а подписать токен можно только там, где лежит JWT_SECRET.
+//   cd /var/www/voyage/server && node --env-file=.env calltest.cjs
 const { io } = require('socket.io-client');
 
-const URL = 'https://voyage-coms.ru';
+const URL = process.env.COMS_TEST_URL || 'https://voyage-coms.ru';
 const ROOM = { roomSlug: 'voy-test-call', inviteKey: 'k-test' };
 
+// Сервер больше не верит клиенту на слово: presence принимает только токен
+function tokenFor(username) {
+  const { signToken } = require('./src/lib/jwt');
+  return signToken({ id: `test-${username}`, username });
+}
+
 function connect(username) {
+  const token = tokenFor(username);
   return new Promise((resolve) => {
     const s = io(URL, { transports: ['websocket'], extraHeaders: { Origin: 'capacitor://localhost' } });
-    s.on('connect', () => { s.emit('presence', { username }); setTimeout(() => resolve(s), 250); });
+    s.on('connect', () => { s.emit('presence', { token }); setTimeout(() => resolve(s), 250); });
   });
 }
 

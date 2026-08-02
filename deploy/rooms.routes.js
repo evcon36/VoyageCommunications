@@ -304,6 +304,12 @@ router.delete('/:slug', authMiddleware, async (req, res) => {
     if (!room) return res.status(404).json({ message: 'Комната не найдена' });
     if (room.ownerId !== req.user.id) return res.status(403).json({ message: 'Удалять может только владелец' });
     await prisma.room.delete({ where: { slug: req.params.slug } });
+    // Закрываем и сам звонок. Без этого удаление приватной комнаты
+    // оборачивалось её открытием: запись из базы исчезала, проверки
+    // приватности переставали срабатывать, а разговор в LiveKit продолжался,
+    // и зайти в него мог любой, кто знает адрес комнаты.
+    try { await roomSvc.deleteRoom(req.params.slug); } catch { /* комнаты в LiveKit могло и не быть */ }
+    global.admittedWaiters?.delete(req.params.slug);
     return res.json({ message: 'Комната удалена' });
   } catch (e) {
     console.error('ROOM DELETE ERROR:', e);
