@@ -521,6 +521,18 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
   scrollbar-width: none;
   flex-shrink: 0;
   height: 130px;
+  /* Панель кнопок висит поверх сцены, поэтому лента должна кончаться над
+     ней: иначе на телефоне камеры уезжают под кнопки и под полоску жестов.
+     Точное значение приходит инлайном из App.jsx после замера панели, здесь
+     запас на первый кадр. */
+  margin-bottom: 162px;
+  transition: margin-bottom .2s ease;
+}
+/* В горизонтали высоты мало, и лента не должна съедать экран, ради которого
+   демонстрацию и включили. Правило идёт после базового: иначе одинаковая
+   специфичность отдаёт победу тому, что ниже в файле. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .camera-strip { height: 84px; }
 }
 .camera-strip::-webkit-scrollbar { display: none; }
 
@@ -2631,10 +2643,23 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   justify-content: center;
   gap: 8px;
   flex: 0 0 auto;
+  transition: height .28s cubic-bezier(.32,.72,0,1);
 }
 .tile-rows .participant-tile { border-radius: 14px; }
-/* видео показывается целиком — обрезки нет нигде */
-.tile-rows .participant-tile video { object-fit: cover; object-position: center; }
+/* Видео показывается целиком: обрезки нет нигде. Плитке заранее задана
+   пропорция потока, так что полос обычно не видно, но пока пропорция ещё
+   не измерена, contain покажет поля, а cover срезал бы человеку пол-лица. */
+.tile-rows .participant-tile video { object-fit: contain; object-position: center; }
+
+/* Кто-то включил или выключил камеру — соседние плитки переезжают плавно,
+   а не прыгают. Пропорции при этом не пересчитываются, иначе анимация сама
+   запускала бы новый пересчёт. */
+.tile-rows .participant-tile {
+  transition: width .28s cubic-bezier(.32,.72,0,1), height .28s cubic-bezier(.32,.72,0,1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tile-row, .tile-rows .participant-tile { transition: none; }
+}
 
 /* Выключенная камера: маленький квадрат снизу, места в сетке не занимает */
 .off-row {

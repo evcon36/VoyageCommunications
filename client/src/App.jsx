@@ -2556,6 +2556,26 @@ export default function App() {
     return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   }, [joined]);
 
+  // Лента камер при демонстрации прижата к низу, а панель кнопок висит
+  // поверх неё: на телефоне лента уходила под кнопки и под полоску жестов.
+  // Высота панели зависит от ориентации и от числа кнопок, поэтому меряем
+  // её, а не подбираем число руками.
+  const controlsRef = useRef(null);
+  const [controlsH, setControlsH] = useState(0);
+  useEffect(() => {
+    const el = controlsRef.current;
+    if (!el || !window.ResizeObserver) return;
+    const apply = () => {
+      const h = Math.round(el.getBoundingClientRect().height);
+      setControlsH(p => (p === h ? p : h));
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    window.addEventListener('orientationchange', apply);
+    return () => { ro.disconnect(); window.removeEventListener('orientationchange', apply); };
+  }, [joined]);
+
   const [pinnedId, setPinnedId] = useState(null);
   const [lastSpeakerId, setLastSpeakerId] = useState(null);
   const [chatUnread, setChatUnread] = useState(0);
@@ -2582,8 +2602,19 @@ export default function App() {
   // Пропорции потоков приходят от плиток: их можно узнать только измерив видео
   const [tileAspect, setTileAspect] = useState({});
   const onTileMeta = useCallback((id, aspect) => {
-    if (!id) return;
-    setTileAspect(prev => (prev[id] === aspect ? prev : { ...prev, [id]: aspect }));
+    if (!id || !aspect || !Number.isFinite(aspect)) return;
+    setTileAspect(prev => {
+      const old = prev[id];
+      if (old === aspect) return prev;
+      // adaptiveStream подбирает качество потока под размер плитки на экране,
+      // и размеры видео от этого скачут. Реакция на каждую сотую замыкала
+      // круг: пересчёт сетки → новый размер плитки → другой слой потока →
+      // снова пересчёт. Со стороны это выглядело как рябь на всех камерах
+      // сразу, стоило кому-то выключить свою. Поворот камеры меняет
+      // пропорцию в разы, так что порог его не съест.
+      if (old && Math.abs(old - aspect) / old < 0.08) return prev;
+      return { ...prev, [id]: aspect };
+    });
   }, []);
 
   const localP = livekitRoomRef.current?.localParticipant;
@@ -4233,7 +4264,13 @@ export default function App() {
                   </div>
                 )}
                 {!isScreenFullscreen && (
-                  <div className="camera-strip">
+                  <div
+                    className="camera-strip"
+                    /* отступ считаем в стилях элемента: панель кнопок бывает
+                       и в один ряд, и в два, её высота известна только после
+                       замера */
+                    style={{ marginBottom: controlsVisible ? controlsH + 30 : 12 }}
+                  >
                     {allParticipants.map(p => (
                       <ParticipantTile
                         key={p.identity}
@@ -4406,7 +4443,7 @@ export default function App() {
           </div>
 
           {/* Controls bar — иконки, overlay, авто-скрытие */}
-          <div className="controls-bar" onClick={e => { e.stopPropagation(); revealControls(); }}>
+          <div ref={controlsRef} className="controls-bar" onClick={e => { e.stopPropagation(); revealControls(); }}>
             {/* Попап реакций — сосед сетки, а не потомок кнопки: раньше он
                 центрировался по кнопке шириной 48px и уезжал за край экрана */}
             {isReactionsOpen && (
