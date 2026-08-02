@@ -54,6 +54,50 @@ function removePresence(username, socketId) {
   if (set.size === 0) onlineUsers.delete(username);
 }
 
+// ── Состояние звонков ──
+// callId -> { from, to, roomSlug, inviteKey, fromName, state, timer }
+const activeCalls = new Map();
+const CALL_TIMEOUT_MS = 45000;
+
+function emitTo(username, event, payload) {
+  for (const sid of onlineUsers.get(username) || []) io.to(sid).emit(event, payload);
+}
+
+// Занят, если уже в комнате или в процессе другого звонка.
+// Без этой проверки второй входящий молча перезатирал первый, и человек
+// принимал звонок от одного, а попадал в комнату к другому.
+function isBusy(username) {
+  for (const sid of onlineUsers.get(username) || []) {
+    if (io.sockets.sockets.get(sid)?.data?.roomId) return true;
+  }
+  for (const c of activeCalls.values()) if (c.from === username || c.to === username) return true;
+  return false;
+}
+
+function endCall(callId, reason) {
+  const call = activeCalls.get(callId);
+  if (!call) return;
+  clearTimeout(call.timer);
+  activeCalls.delete(callId);
+  // сообщаем обеим сторонам: иначе одна из них остаётся ждать в пустоте
+  emitTo(call.from, 'call-ended', { callId, reason, peer: call.to });
+  emitTo(call.to, 'call-ended', { callId, reason, peer: call.from });
+}
+
+// отказ ещё до создания звонка (сам себе, недоступен, занят)
+function endToCaller(socket, reason) {
+  socket.emit('call-ended', { callId: null, reason });
+}
+
+// Звонки пользователя, оборвавшиеся вместе с его соединением
+function endCallsOf(username) {
+  if (!username) return;
+  for (const [id, c] of activeCalls) {
+    if (c.from === username) endCall(id, 'cancelled');
+    else if (c.to === username) endCall(id, 'unavailable');
+  }
+}
+
 function emitRoomUsers(roomId) {
   if (!roomId) return;
   const users = roomUsers.get(roomId) || [];
@@ -138,23 +182,61 @@ io.on('connection', (socket) => {
     addPresence(socket.data.presenceUsername, socket.id);
   });
 
-  // Звонок контакту: пересылаем приглашение всем его вкладкам
-  socket.on('call-invite', ({ toUsername, roomSlug, inviteKey, fromName, fromUsername }) => {
-    const targets = onlineUsers.get(String(toUsername || ''));
-    if (!targets || targets.size === 0) {
-      socket.emit('call-unavailable', { toUsername });
-      return;
-    }
+  // ── Звонок контакту ──
+  // Звонящий НЕ входит в комнату, пока не ответили: до этого он в состоянии
+  // «дозвон». Состояние живёт здесь, клиенты только отражают присланное —
+  // иначе两 стороны расходятся и звонок зависает.
+
+  socket.on('call-start', ({ toUsername, roomSlug, inviteKey, fromName }) => {
+    const from = socket.data.presenceUsername;
+    const to = String(toUsername || '');
+    if (!from || !to) return;
+    if (from === to) return endToCaller(socket, 'self');
+
+    const targets = onlineUsers.get(to);
+    if (!targets || targets.size === 0) return endToCaller(socket, 'unavailable');
+    if (isBusy(to)) return endToCaller(socket, 'busy');
+    // повторный клик по «Позвонить» не должен плодить звонки и комнаты
+    for (const c of activeCalls.values()) if (c.from === from) return;
+
+    const callId = `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const call = { callId, from, to, roomSlug, inviteKey, fromName: fromName || from, state: 'ringing' };
+    call.timer = setTimeout(() => endCall(callId, 'timeout'), CALL_TIMEOUT_MS);
+    activeCalls.set(callId, call);
+
     for (const sid of targets) {
-      io.to(sid).emit('incoming-call', { roomSlug, inviteKey, fromName, fromUsername });
+      io.to(sid).emit('call-incoming', { callId, from, fromName: call.fromName, roomSlug, inviteKey });
     }
+    socket.emit('call-ringing', { callId, to, timeoutMs: CALL_TIMEOUT_MS });
   });
 
-  // Отказ от звонка — сообщаем звонившему
-  socket.on('call-declined', ({ toUsername, byName }) => {
-    const targets = onlineUsers.get(String(toUsername || ''));
-    if (!targets) return;
-    for (const sid of targets) io.to(sid).emit('call-declined', { byName });
+  socket.on('call-accept', ({ callId }) => {
+    const call = activeCalls.get(callId);
+    // переход из ringing разрешён ровно один раз: иначе звонок примут
+    // и на телефоне, и на ноутбуке, и оба войдут в комнату
+    if (!call || call.state !== 'ringing') return;
+    if (socket.data.presenceUsername !== call.to) return;
+
+    call.state = 'active';
+    clearTimeout(call.timer);
+    emitTo(call.from, 'call-accepted', { callId, roomSlug: call.roomSlug, inviteKey: call.inviteKey, by: call.to });
+    // остальным устройствам получателя: звонок уже приняли, плашку убрать
+    for (const sid of onlineUsers.get(call.to) || []) {
+      if (sid !== socket.id) io.to(sid).emit('call-ended', { callId, reason: 'taken' });
+    }
+    activeCalls.delete(callId);
+  });
+
+  socket.on('call-decline', ({ callId }) => {
+    const call = activeCalls.get(callId);
+    if (!call || socket.data.presenceUsername !== call.to) return;
+    endCall(callId, 'declined');
+  });
+
+  socket.on('call-cancel', ({ callId }) => {
+    const call = activeCalls.get(callId);
+    if (!call || socket.data.presenceUsername !== call.from) return;
+    endCall(callId, 'cancelled');
   });
 
   // Стук в приватную комнату — видят те, кто уже внутри (решает владелец)
@@ -237,9 +319,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    if (socket.data.presenceUsername) removePresence(socket.data.presenceUsername, socket.id);
+    const who = socket.data.presenceUsername;
+    if (who) removePresence(who, socket.id);
     socket.data.roomId = null;
     socket.data.userName = null;
+    // Звонящий закрыл вкладку — у получателя плашка звонила бы вечно.
+    // Обрываем только когда ушло последнее соединение пользователя.
+    if (who && !onlineUsers.has(who)) endCallsOf(who);
   });
 });
 

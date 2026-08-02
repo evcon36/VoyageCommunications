@@ -158,6 +158,46 @@ const SOUNDS = [
   ]),
 ];
 
+// Почему звонок закончился — человеку нужно объяснение, а не тишина
+const CALL_END_TEXT = {
+  declined: 'Звонок отклонён',
+  cancelled: 'Звонок отменён',
+  timeout: 'Не ответили',
+  busy: 'Абонент занят',
+  unavailable: 'Абонент не в сети',
+  taken: 'Вы ответили на другом устройстве',
+  self: 'Нельзя позвонить самому себе',
+};
+
+// Гудок дозвона и звонок входящего — генерируем, чтобы не тащить mp3.
+function startRingTone(kind) {
+  let ctx;
+  try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch { return () => {}; }
+  let stopped = false;
+  const beep = () => {
+    if (stopped || ctx.state === 'closed') return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = kind === 'in' ? 620 : 440;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.9);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.95);
+    if (kind === 'in' && navigator.vibrate) navigator.vibrate(400);
+  };
+  beep();
+  const id = setInterval(beep, kind === 'in' ? 2000 : 3000);
+  return () => {
+    stopped = true;
+    clearInterval(id);
+    if (navigator.vibrate) navigator.vibrate(0);
+    try { ctx.close(); } catch { /* уже закрыт */ }
+  };
+}
+
 // --- Grid: cols by participant count ---
 function getGridCols(n) {
   if (n <= 1) return 1;
@@ -502,7 +542,12 @@ export default function App() {
   const [contacts, setContacts] = useState([]);
   const [contactSearch, setContactSearch] = useState('');
   const [searchResults, setSearchResults] = useState([]);
-  const [incomingCall, setIncomingCall] = useState(null); // { fromName, fromUsername, roomSlug, inviteKey }
+  // Звонок — одно состояние на обе роли. Раньше звонящий сразу оказывался
+  // «в звонке», а получатель жил в отдельной переменной, и стороны расходились.
+  // { role:'out'|'in', callId, peer, peerName, roomSlug, inviteKey, phase:'ringing'|'connecting' }
+  const [call, setCall] = useState(null);
+  const [callNotice, setCallNotice] = useState('');   // «Отклонён», «Занят» и т.п.
+  const [callLeft, setCallLeft] = useState(0);        // сколько секунд осталось звонить
   // Доступ к камере и микрофону отклонён: iOS не даёт спросить повторно,
   // вернуть можно только в настройках системы — объясняем это пользователю.
   const [mediaBlocked, setMediaBlocked] = useState(false);
@@ -1420,6 +1465,7 @@ export default function App() {
 
   // Позвонить контакту: создаём приватную комнату, зовём его и заходим сами
   const callContact = async (username) => {
+    if (call) return;                                    // уже звоним — второй клик игнорируем
     try {
       const token = localStorage.getItem('token');
       const resp = await fetch(`${SERVER_URL}/rooms/call`, {
@@ -1427,22 +1473,69 @@ export default function App() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ username }),
       });
-      if (!resp.ok) { setStatus('Не удалось создать звонок'); return; }
+      if (!resp.ok) { setCallNotice('Не удалось создать звонок'); return; }
       const { room } = await resp.json();
-      socket.emit('call-invite', {
+      // Комнату создаём, но НЕ входим: пока не ответили, это дозвон, а не
+      // разговор. Иначе тикал таймер и писалась тишина в пустой комнате.
+      setCall({
+        role: 'out', phase: 'ringing', peer: username, peerName: username,
+        roomSlug: room.slug, inviteKey: room.inviteKey,
+      });
+      socket.emit('call-start', {
         toUsername: username,
         roomSlug: room.slug,
         inviteKey: room.inviteKey,
         fromName: userName.trim() || authUser?.username,
-        fromUsername: authUser?.username,
       });
-      inviteKeyRef.current = room.inviteKey;
-      setRoomId(room.slug);
-      setStatus(`Звоним ${username}...`);
-      joinRoomWith(room.slug, room.inviteKey);
     } catch {
-      setStatus('Не удалось создать звонок');
+      setCallNotice('Не удалось создать звонок');
     }
+  };
+
+  // Вошли в комнату — экран дозвона больше не нужен
+  useEffect(() => { if (joined) setCall(null); }, [joined]);
+
+  // Обратный отсчёт: человек должен видеть, что звонок не будет ждать вечно
+  useEffect(() => {
+    if (call?.phase !== 'ringing') { setCallLeft(0); return; }
+    setCallLeft(45);
+    const id = setInterval(() => setCallLeft(s => (s > 0 ? s - 1 : 0)), 1000);
+    return () => clearInterval(id);
+  }, [call?.callId, call?.phase]);
+
+  // Гудки и вибрация. Без звука входящий звонок просто пропускают.
+  useEffect(() => {
+    if (call?.phase !== 'ringing') return;
+    return startRingTone(call.role === 'in' ? 'in' : 'out');
+  }, [call?.callId, call?.phase, call?.role]);
+
+  useEffect(() => {
+    if (!callNotice) return;
+    const id = setTimeout(() => setCallNotice(''), 4000);
+    return () => clearTimeout(id);
+  }, [callNotice]);
+
+  const acceptCall = async () => {
+    const c = call;
+    if (!c || c.role !== 'in') return;
+    socket.emit('call-accept', { callId: c.callId });
+    // Обязательно выйти из текущего звонка: иначе микрофон остаётся в старой
+    // комнате и прежние собеседники продолжают нас слышать.
+    if (joined) await leaveCall();
+    setCall({ ...c, phase: 'connecting' });
+    inviteKeyRef.current = c.inviteKey;
+    setRoomId(c.roomSlug);
+    joinRoomWith(c.roomSlug, c.inviteKey);
+  };
+
+  const declineCall = () => {
+    if (call?.callId) socket.emit('call-decline', { callId: call.callId });
+    setCall(null);
+  };
+
+  const cancelCall = () => {
+    if (call?.callId) socket.emit('call-cancel', { callId: call.callId });
+    setCall(null);
   };
 
   // ── Постучаться в приватную комнату ──
@@ -1532,9 +1625,24 @@ export default function App() {
       setStatus('Комната заполнена — максимум 10 участников');
     });
 
-    socket.on('incoming-call', (call) => setIncomingCall(call));
-    socket.on('call-declined', ({ byName }) => setStatus(`${byName || 'Собеседник'} отклонил звонок`));
-    socket.on('call-unavailable', ({ toUsername }) => setStatus(`${toUsername} сейчас не в сети`));
+    socket.on('call-incoming', (c) => {
+      setCall({
+        role: 'in', phase: 'ringing', callId: c.callId,
+        peer: c.from, peerName: c.fromName || c.from,
+        roomSlug: c.roomSlug, inviteKey: c.inviteKey,
+      });
+    });
+    socket.on('call-ringing', ({ callId }) => setCall(p => (p ? { ...p, callId } : p)));
+    socket.on('call-accepted', ({ roomSlug, inviteKey }) => {
+      setCall(p => (p ? { ...p, phase: 'connecting' } : p));
+      inviteKeyRef.current = inviteKey;
+      setRoomId(roomSlug);
+      joinRoomWithRef.current?.(roomSlug, inviteKey);
+    });
+    socket.on('call-ended', ({ reason }) => {
+      setCall(null);
+      setCallNotice(CALL_END_TEXT[reason] || 'Звонок завершён');
+    });
     socket.on('knock', (req) => setKnockRequest(req));
 
     socket.on('recording-state', ({ active, by }) => {
@@ -1570,9 +1678,10 @@ export default function App() {
       socket.off('wait-knock');
       socket.off('wait-admitted');
       socket.off('wait-denied');
-      socket.off('incoming-call');
-      socket.off('call-declined');
-      socket.off('call-unavailable');
+      socket.off('call-incoming');
+      socket.off('call-ringing');
+      socket.off('call-accepted');
+      socket.off('call-ended');
       socket.off('knock');
     };
   }, [addAction, showFloatingReaction]);
@@ -1641,6 +1750,11 @@ export default function App() {
     joinRoomWith(guestInvite.room, guestInvite.key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [guestMode]);
+
+  // Обработчики сокета регистрируются один раз, поэтому свежую ссылку на
+  // joinRoomWith держим в ref: иначе при ответе на звонок сработает версия
+  // с первого рендера — с пустым именем и без авторизации.
+  const joinRoomWithRef = useRef(null);
 
   const joinRoomWith = async (slug, key) => {
     // пустые поля — объясняем, а не молчим
@@ -1880,6 +1994,8 @@ export default function App() {
       joiningRef.current = false;
     }
   };
+
+  joinRoomWithRef.current = joinRoomWith;
 
   const leaveCall = async () => {
     joiningRef.current = false;
@@ -2371,30 +2487,40 @@ export default function App() {
       )}
 
       {/* ── Входящий звонок ── */}
-      {incomingCall && (
+      {call?.role === 'in' && call.phase === 'ringing' && (
         <div className="call-popup">
           <div className="call-popup-title"><Icon name="phone" size={18} /> Входящий звонок</div>
-          <div className="call-popup-from">{incomingCall.fromName || incomingCall.fromUsername}</div>
+          <div className="call-popup-from">{call.peerName}</div>
+          <div className="call-popup-hint">осталось {callLeft} с</div>
           <div className="call-popup-actions">
-            <button
-              className="primary-btn"
-              onClick={() => {
-                const c = incomingCall;
-                setIncomingCall(null);
-                inviteKeyRef.current = c.inviteKey;
-                joinRoomWith(c.roomSlug, c.inviteKey);
-              }}
-            >Принять</button>
-            <button
-              className="ghost-btn"
-              onClick={() => {
-                socket.emit('call-declined', { toUsername: incomingCall.fromUsername, byName: userName.trim() });
-                setIncomingCall(null);
-              }}
-            >Отклонить</button>
+            <button className="primary-btn" onClick={acceptCall}>Принять</button>
+            <button className="ghost-btn" onClick={declineCall}>Отклонить</button>
           </div>
         </div>
       )}
+
+      {/* ── Исходящий звонок: дозвон, ещё не разговор ── */}
+      {call?.role === 'out' && (
+        <div className="dialing-shell">
+          <div className="dialing-card">
+            <div className="dialing-avatar">{(call.peerName || '?')[0].toUpperCase()}</div>
+            <div className="dialing-name">{call.peerName}</div>
+            <div className="dialing-state">
+              {call.phase === 'connecting'
+                ? 'Соединяем…'
+                : <>Вызов… <span className="dialing-left">{callLeft} с</span></>}
+            </div>
+            {call.phase === 'ringing' && (
+              <button className="ctrl-round ctrl-round--danger dialing-cancel" onClick={cancelCall} aria-label="Отменить звонок">
+                <Icon name="phoneOff" size={22} />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Почему звонок не состоялся — иначе человек не понимает, что произошло */}
+      {callNotice && <div className="call-notice">{callNotice}</div>}
 
       {/* ── Кто-то стучится в приватную комнату (видит владелец в звонке) ── */}
       {knockRequest && roomInfo?.isOwner && (
