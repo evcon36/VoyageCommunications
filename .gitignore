@@ -3,6 +3,7 @@ client/.env.production
 server/.env
 server/dev.db
 deploy/deploy.config.json
+deploy/codemagic.config.json
 client/deploy-dist.tar.gz
 client/dist-audit
 # Сборочные артефакты веб-клиента
