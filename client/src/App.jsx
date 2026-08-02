@@ -503,6 +503,9 @@ export default function App() {
   const [contactSearch, setContactSearch] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [incomingCall, setIncomingCall] = useState(null); // { fromName, fromUsername, roomSlug, inviteKey }
+  // Доступ к камере и микрофону отклонён: iOS не даёт спросить повторно,
+  // вернуть можно только в настройках системы — объясняем это пользователю.
+  const [mediaBlocked, setMediaBlocked] = useState(false);
   const [knockRequest, setKnockRequest] = useState(null); // { username, name, roomId } — у владельца
   const [knocking, setKnocking] = useState(false);        // мы ждём, когда впустят
   // Комната ожидания
@@ -1854,8 +1857,11 @@ export default function App() {
         setStatus('Подключено');
       } catch (camErr) {
         console.warn('Camera/mic error:', camErr);
-        try { await room.localParticipant.setMicrophoneEnabled(true); } catch {}
-        setStatus('Камера недоступна — только микрофон');
+        let micOk = false;
+        try { await room.localParticipant.setMicrophoneEnabled(true); micOk = true; } catch { /* микрофон тоже закрыт */ }
+        const denied = camErr?.name === 'NotAllowedError' || camErr?.name === 'SecurityError';
+        if (denied && !micOk) setMediaBlocked(true);
+        setStatus(micOk ? 'Камера недоступна — только микрофон' : 'Нет доступа к камере и микрофону');
       }
 
       // политика «выключать микрофон при входе» (для гостей, не для владельца)
@@ -2348,6 +2354,21 @@ export default function App() {
       {SOUNDS.map(s => (
         <audio key={s.id} ref={el => { soundRefs.current[s.id] = el; }} src={s.file} preload="auto" />
       ))}
+
+      {/* ── Доступ к камере и микрофону отклонён ── */}
+      {mediaBlocked && (
+        <div className="call-popup media-blocked">
+          <div className="call-popup-title"><Icon name="cameraOff" size={18} /> Нет доступа к камере и микрофону</div>
+          <p className="media-blocked-text">
+            Разрешение было отклонено. Заново запросить его приложение не может —
+            вернуть доступ получится только в настройках телефона.
+          </p>
+          <p className="media-blocked-path">Настройки → COMS → включить «Камера» и «Микрофон»</p>
+          <div className="call-popup-actions">
+            <button className="primary-btn" onClick={() => setMediaBlocked(false)}>Понятно</button>
+          </div>
+        </div>
+      )}
 
       {/* ── Входящий звонок ── */}
       {incomingCall && (

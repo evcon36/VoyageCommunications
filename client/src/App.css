@@ -347,7 +347,11 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
   font-size: 13px;
   font-weight: 600;
   color: #fff;
-  text-shadow: 0 1px 4px rgba(0,0,0,0.7);
+  /* подложка-капсула: имя читается и на светлом кадре, и у самого края */
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.45);
+  backdrop-filter: blur(6px);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1116,6 +1120,21 @@ input:-webkit-autofill:focus {
   .video-grid .participant-tile video {
     object-fit: contain;
     background: #000;
+  }
+  /* Единственный участник — не карточка в ленте, а видео во всю доступную
+     высоту: иначе полэкрана остаётся чёрным под аккуратной плиткой 16:9. */
+  .video-grid .participant-tile:only-child {
+    aspect-ratio: auto;
+    max-height: none;
+    height: 100%;
+    flex: 1 1 auto;
+  }
+  .video-grid .participant-tile:only-child video {
+    object-fit: cover;
+  }
+  /* Подпись в полноэкранном слоте не должна упираться в полосу жестов */
+  .pip-slot--full .tile-footer {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
   }
 }
 
@@ -2423,3 +2442,22 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   padding-bottom: 1px;
 }
 .legal-links a:hover { color: var(--accent-text); border-bottom-color: var(--accent-border); }
+
+/* ── Отказ в доступе к камере и микрофону ── */
+.media-blocked { text-align: left; }
+.media-blocked .call-popup-title { justify-content: flex-start; margin-bottom: 10px; }
+.media-blocked-text {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.media-blocked-path {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-3);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
