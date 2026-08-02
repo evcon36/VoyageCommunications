@@ -2589,3 +2589,98 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   box-shadow: 0 10px 30px rgba(0,0,0,0.5);
   animation: fadeInUp .2s ease;
 }
+
+/* ── Рядная раскладка без обрезки ──
+   Плитка принимает пропорцию потока, ряд заполняет ширину, неполный ряд
+   центрируется. Ничего не режем и не листаем: если не влезает по высоте,
+   вся раскладка уменьшается пропорционально. */
+.tile-rows {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;          /* остаток по высоте делим поровну сверху и снизу */
+  gap: 8px;
+  padding: calc(4px + env(safe-area-inset-top)) calc(4px + env(safe-area-inset-right))
+           calc(4px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left));
+  overflow: hidden;
+}
+.tile-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.tile-rows .participant-tile { border-radius: 14px; }
+/* видео показывается целиком — обрезки нет нигде */
+.tile-rows .participant-tile video { object-fit: cover; object-position: center; }
+
+/* Выключенная камера: маленький квадрат снизу, места в сетке не занимает */
+.off-row {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 4px;
+}
+.off-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 56px;
+  padding: 0 12px 0 8px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+}
+.off-chip-letter {
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  display: grid; place-items: center;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+.off-chip-name { font-size: 13px; color: var(--text-dim); max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Своё видео: всегда плавающее окно ── */
+.self-pip {
+  position: absolute;
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(150px + env(safe-area-inset-bottom));
+  width: 104px;
+  height: 148px;
+  border-radius: 16px;
+  overflow: hidden;
+  z-index: 8;
+  box-shadow: 0 8px 26px rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.14);
+  cursor: pointer;
+  transition: width .28s cubic-bezier(.4,0,.2,1), height .28s cubic-bezier(.4,0,.2,1),
+              right .28s cubic-bezier(.4,0,.2,1), bottom .28s cubic-bezier(.4,0,.2,1),
+              border-radius .28s;
+}
+.self-pip .participant-tile { width: 100%; height: 100%; border: none; border-radius: inherit; }
+.self-pip .tile-footer { display: none; }
+/* увеличено втрое, с полями по бокам */
+.self-pip--big {
+  width: min(312px, calc(100vw - 48px));
+  height: min(444px, calc(100vh - 200px));
+  right: 50%;
+  transform: translateX(50%);
+  bottom: 50%;
+  margin-bottom: -222px;
+  z-index: 12;
+}
+.self-pip--big .tile-footer { display: flex; }
+/* фон за увеличенным окном затемняется и размывается */
+.self-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  background: rgba(0,0,0,0.45);
+  backdrop-filter: blur(14px);
+}

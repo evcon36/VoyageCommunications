@@ -204,22 +204,53 @@ function startRingTone(kind) {
 // поместиться в экран, а видео заполняет ячейку с обрезкой, как в FaceTime.
 // Перебираем все варианты «столбцы × строки» и берём тот, где ячейка крупнее
 // и ближе к вертикальной пропорции: лица в таких ячейках читаются лучше.
-const SPEAKER_FROM = 5;                    // с этого числа — главный + лента
+const SPEAKER_FROM = 6;      // на телефоне с этого числа — главный + лента
+const TILE_GAP = 8;
+const DEFAULT_ASPECT = 9 / 16;
 
-function bestGrid(n, w, h) {
-  if (n <= 1 || w <= 0 || h <= 0) return { cols: 1, rows: 1 };
-  // В портрете тянемся к вертикальной ячейке, в ландшафте к горизонтальной.
-  // С одной целью на оба случая в ландшафте получались узкие «корешки книг».
-  const target = w >= h ? 4 / 3 : 3 / 4;
-  let best = { cols: 1, rows: n, score: -1 };
-  for (let cols = 1; cols <= n; cols++) {
-    const rows = Math.ceil(n / cols);
-    const cw = w / cols;
-    const ch = h / rows;
-    const aspect = cw / ch;
-    const fit = Math.min(aspect, target) / Math.max(aspect, target);
-    const score = cw * ch * fit;
-    if (score > best.score) best = { cols, rows, score };
+// ── Раскладка без обрезки ──
+// Видео никогда не режем: плитка принимает пропорцию потока. Участники
+// разбиваются на ряды, ряд заполняет ширину, высота ряда следует из суммы
+// пропорций. Последний неполный ряд не растягиваем — он берёт высоту
+// предыдущего и центрируется. Если не помещается по высоте, уменьшаем
+// всё пропорционально: узких обрезанных столбиков быть не должно.
+function packRows(aspects, W, H, gap = TILE_GAP) {
+  const n = aspects.length;
+  if (!n || W <= 0 || H <= 0) return null;
+  let best = null;
+  const variants = 1 << Math.max(n - 1, 0);
+  for (let mask = 0; mask < variants; mask++) {
+    const rows = [];
+    let cur = [0];
+    for (let i = 1; i < n; i++) {
+      if (mask & (1 << (i - 1))) { rows.push(cur); cur = []; }
+      cur.push(i);
+    }
+    rows.push(cur);
+
+    const heights = [];
+    let prev = Infinity;
+    for (let i = 0; i < rows.length; i++) {
+      const sum = rows[i].reduce((a, idx) => a + aspects[idx], 0);
+      const fill = (W - gap * (rows[i].length - 1)) / sum;
+      const isLast = i === rows.length - 1 && rows.length > 1;
+      const h = isLast ? Math.min(fill, prev) : fill;
+      heights.push(h);
+      prev = h;
+    }
+    const total = heights.reduce((a, b) => a + b, 0) + gap * (rows.length - 1);
+    const scale = Math.min(1, H / total);
+    const finalH = heights.map(h => h * scale);
+
+    let minArea = Infinity;
+    rows.forEach((row, i) => row.forEach(idx => {
+      minArea = Math.min(minArea, aspects[idx] * finalH[i] * finalH[i]);
+    }));
+    // берём раскладку, где самая мелкая плитка крупнее всего — так никто
+    // не оказывается в «щели», пока сосед занимает пол-экрана
+    if (!best || minArea > best.minArea) {
+      best = { rows, heights: finalH, minArea, total: total * scale };
+    }
   }
   return best;
 }
@@ -306,7 +337,7 @@ function ScreenShareTile({ participant, isLocal }) {
 }
 
 // --- Single participant tile ---
-function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMuted, onToggleMute, backdrop, gridSpan }) {
+function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMuted, onToggleMute, backdrop, gridSpan, onMeta }) {
   const videoRef = useRef(null);
   const backdropRef = useRef(null);
   const audioRef = useRef(null);
@@ -414,6 +445,13 @@ function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMute
     isLocal && isFrontCamera && !isCamOff
       ? { transform: 'scaleX(-1)', WebkitTransform: 'scaleX(-1)' }
       : {};
+
+  // Раскладке нужны пропорция потока и факт выключенной камеры: плитки
+  // подгоняются под видео, а участники без камеры уходят из сетки вниз.
+  const noVideo = !hasVideo || isCamOff;
+  useEffect(() => {
+    onMeta?.(participant?.identity, { aspect: videoAspect, noVideo });
+  }, [onMeta, participant?.identity, videoAspect, noVideo]);
 
   return (
     <div
@@ -2281,19 +2319,43 @@ export default function App() {
   }, [joined]);
 
   const [pinnedId, setPinnedId] = useState(null);
-  // Участник вышел — закрепление за ним больше не имеет смысла
+  const [selfBig, setSelfBig] = useState(false);   // своё видео увеличено втрое
   useEffect(() => {
     if (pinnedId && !allParticipants.some(p => p.identity === pinnedId)) setPinnedId(null);
   }, [allParticipants, pinnedId]);
 
-  const speakerMode = allParticipants.length >= SPEAKER_FROM || Boolean(pinnedId);
+  // Пропорции потоков и «камера выключена» приходят от плиток
+  const [tileMeta, setTileMeta] = useState({});
+  const onTileMeta = useCallback((id, meta) => {
+    if (!id) return;
+    setTileMeta(prev => {
+      const old = prev[id];
+      if (old && old.aspect === meta.aspect && old.noVideo === meta.noVideo) return prev;
+      return { ...prev, [id]: meta };
+    });
+  }, []);
+
+  const localP = livekitRoomRef.current?.localParticipant;
+  // Своё видео живёт в плавающем окне и в сетку не попадает никогда
+  const remotes = allParticipants.filter(p => p !== localP);
+  // Выключенная камера уходит из сетки вниз маленьким квадратом: она не
+  // должна отнимать место у тех, кого действительно видно
+  const visible = remotes.filter(p => !tileMeta[p.identity]?.noVideo);
+  const cameraOff = remotes.filter(p => tileMeta[p.identity]?.noVideo);
+
+  // «Главный + лента» — только на телефоне и только когда людей много
+  const speakerMode = (isTouchDevice && visible.length >= SPEAKER_FROM) || Boolean(pinnedId);
   const mainParticipant = speakerMode
-    ? (allParticipants.find(p => p.identity === pinnedId) || allParticipants[0])
+    ? (visible.find(p => p.identity === pinnedId) || visible[0])
     : null;
-  const stripParticipants = speakerMode
-    ? allParticipants.filter(p => p !== mainParticipant)
-    : [];
-  const grid = bestGrid(Math.max(allParticipants.length, 1), stageSize.w, stageSize.h);
+  const stripParticipants = speakerMode ? visible.filter(p => p !== mainParticipant) : [];
+
+  const offRowH = cameraOff.length ? 64 + TILE_GAP : 0;
+  const pack = packRows(
+    visible.map(p => tileMeta[p.identity]?.aspect || DEFAULT_ASPECT),
+    stageSize.w,
+    Math.max(stageSize.h - offRowH, 80),
+  );
 
   // Find participant with active screen share
   const screenSharePresenter = useMemo(() => {
@@ -3898,53 +3960,19 @@ export default function App() {
                   </div>
                 )}
               </div>
-            ) : usePip ? (
-              (() => {
-                const T = pipDragging ? 'none'
-                  : 'top .3s cubic-bezier(.4,0,.2,1), left .3s cubic-bezier(.4,0,.2,1), width .3s cubic-bezier(.4,0,.2,1), height .3s cubic-bezier(.4,0,.2,1), border-radius .3s';
-                const { w: tw, h: th } = pipThumbSize();
-                const fullStyle = { top: 0, left: 0, width: pipStageSize.w || '100%', height: pipStageSize.h || '100%', borderRadius: 0, zIndex: 1, transition: T };
-                const thumbStyle = { top: pipThumb.y, left: pipThumb.x, width: tw, height: th, borderRadius: 16, zIndex: 3, transition: T };
-                return (
-                  <div className="pip-stage" ref={pipStageRef}>
-                    <div
-                      className={`pip-slot ${pipSelfBig ? 'pip-slot--full' : 'pip-slot--thumb'}`}
-                      style={pipSelfBig ? fullStyle : thumbStyle}
-                      onPointerDown={pipSelfBig ? undefined : onPipThumbDown}
-                      onClick={pipSelfBig ? undefined : (e) => e.stopPropagation()}
-                    >
-                      <ParticipantTile participant={pipLocal} isLocal isFrontCamera={isFrontCamera} backdrop={pipSelfBig} />
-                    </div>
-                    <div
-                      className={`pip-slot ${!pipSelfBig ? 'pip-slot--full' : 'pip-slot--thumb'}`}
-                      style={!pipSelfBig ? fullStyle : thumbStyle}
-                      onPointerDown={!pipSelfBig ? undefined : onPipThumbDown}
-                      onClick={!pipSelfBig ? undefined : (e) => e.stopPropagation()}
-                    >
-                      <ParticipantTile
-                        participant={pipRemote}
-                        isFrontCamera={isFrontCamera}
-                        localMuted={mutedUsers.has(pipRemote.identity)}
-                        onToggleMute={() => toggleUserMute(pipRemote.identity)}
-                        backdrop={!pipSelfBig}
-                      />
-                    </div>
-                  </div>
-                );
-              })()
             ) : speakerMode ? (
-              /* Много участников: один крупно, остальные лентой снизу.
-                 Выбор главного — тап по миниатюре, а не по большому видео:
-                 тап по видео уже переключает панель управления. */
+              /* Много участников на телефоне: один крупно, остальные лентой.
+                 Выбор главного — тап по миниатюре: тап по большому видео
+                 уже переключает панель управления. */
               <div className="speaker-layout">
                 <div className="speaker-main">
                   <ParticipantTile
                     key={mainParticipant.identity}
                     participant={mainParticipant}
-                    isLocal={mainParticipant === livekitRoomRef.current?.localParticipant}
                     isFrontCamera={isFrontCamera}
                     localMuted={mutedUsers.has(mainParticipant.identity)}
                     onToggleMute={() => toggleUserMute(mainParticipant.identity)}
+                    onMeta={onTileMeta}
                   />
                   {pinnedId && (
                     <button className="pin-chip" onClick={(e) => { e.stopPropagation(); setPinnedId(null); }}>
@@ -3960,47 +3988,62 @@ export default function App() {
                       onClick={(e) => { e.stopPropagation(); setPinnedId(p.identity); }}
                       aria-label={`Показать крупно: ${displayName(p)}`}
                     >
-                      <ParticipantTile
-                        participant={p}
-                        isLocal={p === livekitRoomRef.current?.localParticipant}
-                        isFrontCamera={isFrontCamera}
-                        localMuted={mutedUsers.has(p.identity)}
-                      />
+                      <ParticipantTile participant={p} isFrontCamera={isFrontCamera} onMeta={onTileMeta} />
                     </button>
                   ))}
                 </div>
               </div>
             ) : (
-              <div
-                className="video-grid"
-                style={{
-                  /* колонок вдвое больше, плитка занимает две: так неполный
-                     последний ряд можно сдвинуть на половину и отцентрировать,
-                     а не оставлять дыру в углу */
-                  gridTemplateColumns: `repeat(${grid.cols * 2}, minmax(0, 1fr))`,
-                  gridTemplateRows: `repeat(${grid.rows}, minmax(0, 1fr))`,
-                }}
-              >
-                {allParticipants.map((p, i) => {
-                  const lastRowCount = allParticipants.length - (grid.rows - 1) * grid.cols;
-                  const isLastRow = i >= (grid.rows - 1) * grid.cols;
-                  const firstOfLastRow = i === (grid.rows - 1) * grid.cols;
-                  const offset = grid.cols - lastRowCount; // в половинных колонках
-                  return (
-                    <ParticipantTile
-                      key={p.identity}
-                      participant={p}
-                      isLocal={p === livekitRoomRef.current?.localParticipant}
-                      isFrontCamera={isFrontCamera}
-                      localMuted={mutedUsers.has(p.identity)}
-                      onToggleMute={() => toggleUserMute(p.identity)}
-                      gridSpan={isLastRow && firstOfLastRow && offset > 0
-                        ? { gridColumn: `${offset + 1} / span 2` }
-                        : { gridColumn: 'span 2' }}
-                    />
-                  );
-                })}
+              /* Рядная раскладка без обрезки: плитка принимает пропорцию
+                 потока, ряд заполняет ширину, неполный ряд центрируется. */
+              <div className="tile-rows">
+                {pack && pack.rows.map((row, ri) => (
+                  <div className="tile-row" key={ri} style={{ height: Math.round(pack.heights[ri]) }}>
+                    {row.map(idx => {
+                      const p = visible[idx];
+                      const h = pack.heights[ri];
+                      const a = tileMeta[p.identity]?.aspect || DEFAULT_ASPECT;
+                      return (
+                        <ParticipantTile
+                          key={p.identity}
+                          participant={p}
+                          isFrontCamera={isFrontCamera}
+                          localMuted={mutedUsers.has(p.identity)}
+                          onToggleMute={() => toggleUserMute(p.identity)}
+                          onMeta={onTileMeta}
+                          gridSpan={{ width: Math.round(a * h), height: Math.round(h), flex: '0 0 auto' }}
+                        />
+                      );
+                    })}
+                  </div>
+                ))}
+                {/* Выключенная камера не занимает место в сетке — только
+                    маленький квадрат снизу, чтобы человек не пропал совсем */}
+                {cameraOff.length > 0 && (
+                  <div className="off-row">
+                    {cameraOff.map(p => (
+                      <div className="off-chip" key={p.identity} title={displayName(p)}>
+                        <span className="off-chip-letter">{(displayName(p) || '?')[0].toUpperCase()}</span>
+                        <span className="off-chip-name">{displayName(p)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
+            )}
+
+            {/* Своё видео — всегда плавающее окно, в сетку не попадает.
+                Тап увеличивает втрое, фон за ним затемняется и размывается. */}
+            {localP && (
+              <>
+                {selfBig && <div className="self-scrim" onClick={(e) => { e.stopPropagation(); setSelfBig(false); }} />}
+                <div
+                  className={`self-pip${selfBig ? ' self-pip--big' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); setSelfBig(v => !v); }}
+                >
+                  <ParticipantTile participant={localP} isLocal isFrontCamera={isFrontCamera} onMeta={onTileMeta} />
+                </div>
+              </>
             )}
           </div>
 
