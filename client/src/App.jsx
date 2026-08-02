@@ -198,12 +198,30 @@ function startRingTone(kind) {
   };
 }
 
-// --- Grid: cols by participant count ---
-function getGridCols(n) {
-  if (n <= 1) return 1;
-  if (n <= 4) return 2;
-  if (n <= 9) return 3;
-  return 4;
+// ── Подбор сетки ──
+// Раньше плитки держали пропорцию камеры и складывались в ленту с прокруткой:
+// на трёх участниках приходилось листать. Теперь наоборот — сетка обязана
+// поместиться в экран, а видео заполняет ячейку с обрезкой, как в FaceTime.
+// Перебираем все варианты «столбцы × строки» и берём тот, где ячейка крупнее
+// и ближе к вертикальной пропорции: лица в таких ячейках читаются лучше.
+const SPEAKER_FROM = 5;                    // с этого числа — главный + лента
+
+function bestGrid(n, w, h) {
+  if (n <= 1 || w <= 0 || h <= 0) return { cols: 1, rows: 1 };
+  // В портрете тянемся к вертикальной ячейке, в ландшафте к горизонтальной.
+  // С одной целью на оба случая в ландшафте получались узкие «корешки книг».
+  const target = w >= h ? 4 / 3 : 3 / 4;
+  let best = { cols: 1, rows: n, score: -1 };
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    const cw = w / cols;
+    const ch = h / rows;
+    const aspect = cw / ch;
+    const fit = Math.min(aspect, target) / Math.max(aspect, target);
+    const score = cw * ch * fit;
+    if (score > best.score) best = { cols, rows, score };
+  }
+  return best;
 }
 
 // --- Persistent audio for remote participants (always mounted) ---
@@ -288,7 +306,7 @@ function ScreenShareTile({ participant, isLocal }) {
 }
 
 // --- Single participant tile ---
-function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMuted, onToggleMute, backdrop }) {
+function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMuted, onToggleMute, backdrop, gridSpan }) {
   const videoRef = useRef(null);
   const backdropRef = useRef(null);
   const audioRef = useRef(null);
@@ -400,7 +418,7 @@ function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMute
   return (
     <div
       className={`participant-tile${small ? ' participant-tile--small' : ''}${isSpeaking ? ' participant-tile--speaking' : ''}`}
-      style={videoAspect ? { '--tile-aspect': videoAspect } : undefined}
+      style={{ ...(videoAspect ? { '--tile-aspect': videoAspect } : null), ...gridSpan }}
     >
       {backdrop && (
         <video ref={backdropRef} className="tile-backdrop" autoPlay playsInline muted
@@ -2239,7 +2257,43 @@ export default function App() {
     window.addEventListener('pointerup', up);
   };
 
-  const gridCols = getGridCols(Math.max(allParticipants.length, 1));
+  // ── Раскладка участников ──
+  // Меряем сам контейнер, а не окно: в WKWebView 100vh врёт, а на повороте
+  // приходят промежуточные размеры. Округляем и обновляем через rAF, иначе
+  // ResizeObserver зацикливается на субпикселях.
+  const stageRef = useRef(null);
+  const [stageSize, setStageSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el || !window.ResizeObserver) return;
+    let raf = 0;
+    const ro = new ResizeObserver(([e]) => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const r = e.contentRect;
+        const w = Math.round(r.width);
+        const h = Math.round(r.height);
+        setStageSize(p => (p.w === w && p.h === h ? p : { w, h }));
+      });
+    });
+    ro.observe(el);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  }, [joined]);
+
+  const [pinnedId, setPinnedId] = useState(null);
+  // Участник вышел — закрепление за ним больше не имеет смысла
+  useEffect(() => {
+    if (pinnedId && !allParticipants.some(p => p.identity === pinnedId)) setPinnedId(null);
+  }, [allParticipants, pinnedId]);
+
+  const speakerMode = allParticipants.length >= SPEAKER_FROM || Boolean(pinnedId);
+  const mainParticipant = speakerMode
+    ? (allParticipants.find(p => p.identity === pinnedId) || allParticipants[0])
+    : null;
+  const stripParticipants = speakerMode
+    ? allParticipants.filter(p => p !== mainParticipant)
+    : [];
+  const grid = bestGrid(Math.max(allParticipants.length, 1), stageSize.w, stageSize.h);
 
   // Find participant with active screen share
   const screenSharePresenter = useMemo(() => {
@@ -3791,7 +3845,7 @@ export default function App() {
           </div>
 
           {/* Video area — full window; тап (телефон) показывает/прячет управление */}
-          <div className={`video-stage${isScreenFullscreen ? ' video-stage--fs' : ''}`} onClick={isTouchDevice ? onStageTap : undefined}>
+          <div ref={stageRef} className={`video-stage${isScreenFullscreen ? ' video-stage--fs' : ''}`} onClick={isTouchDevice ? onStageTap : undefined}>
             {screenSharePresenter ? (
               <div className="presenter-layout">
                 <ScreenShareTile
@@ -3878,21 +3932,74 @@ export default function App() {
                   </div>
                 );
               })()
+            ) : speakerMode ? (
+              /* Много участников: один крупно, остальные лентой снизу.
+                 Выбор главного — тап по миниатюре, а не по большому видео:
+                 тап по видео уже переключает панель управления. */
+              <div className="speaker-layout">
+                <div className="speaker-main">
+                  <ParticipantTile
+                    key={mainParticipant.identity}
+                    participant={mainParticipant}
+                    isLocal={mainParticipant === livekitRoomRef.current?.localParticipant}
+                    isFrontCamera={isFrontCamera}
+                    localMuted={mutedUsers.has(mainParticipant.identity)}
+                    onToggleMute={() => toggleUserMute(mainParticipant.identity)}
+                  />
+                  {pinnedId && (
+                    <button className="pin-chip" onClick={(e) => { e.stopPropagation(); setPinnedId(null); }}>
+                      Закреплён: {displayName(mainParticipant)} <Icon name="close" size={13} />
+                    </button>
+                  )}
+                </div>
+                <div className="speaker-strip">
+                  {stripParticipants.map(p => (
+                    <button
+                      key={p.identity}
+                      className="speaker-thumb"
+                      onClick={(e) => { e.stopPropagation(); setPinnedId(p.identity); }}
+                      aria-label={`Показать крупно: ${displayName(p)}`}
+                    >
+                      <ParticipantTile
+                        participant={p}
+                        isLocal={p === livekitRoomRef.current?.localParticipant}
+                        isFrontCamera={isFrontCamera}
+                        localMuted={mutedUsers.has(p.identity)}
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
             ) : (
               <div
                 className="video-grid"
-                style={{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }}
+                style={{
+                  /* колонок вдвое больше, плитка занимает две: так неполный
+                     последний ряд можно сдвинуть на половину и отцентрировать,
+                     а не оставлять дыру в углу */
+                  gridTemplateColumns: `repeat(${grid.cols * 2}, minmax(0, 1fr))`,
+                  gridTemplateRows: `repeat(${grid.rows}, minmax(0, 1fr))`,
+                }}
               >
-                {allParticipants.map(p => (
-                  <ParticipantTile
-                    key={p.identity}
-                    participant={p}
-                    isLocal={p === livekitRoomRef.current?.localParticipant}
-                    isFrontCamera={isFrontCamera}
-                    localMuted={mutedUsers.has(p.identity)}
-                    onToggleMute={() => toggleUserMute(p.identity)}
-                  />
-                ))}
+                {allParticipants.map((p, i) => {
+                  const lastRowCount = allParticipants.length - (grid.rows - 1) * grid.cols;
+                  const isLastRow = i >= (grid.rows - 1) * grid.cols;
+                  const firstOfLastRow = i === (grid.rows - 1) * grid.cols;
+                  const offset = grid.cols - lastRowCount; // в половинных колонках
+                  return (
+                    <ParticipantTile
+                      key={p.identity}
+                      participant={p}
+                      isLocal={p === livekitRoomRef.current?.localParticipant}
+                      isFrontCamera={isFrontCamera}
+                      localMuted={mutedUsers.has(p.identity)}
+                      onToggleMute={() => toggleUserMute(p.identity)}
+                      gridSpan={isLastRow && firstOfLastRow && offset > 0
+                        ? { gridColumn: `${offset + 1} / span 2` }
+                        : { gridColumn: 'span 2' }}
+                    />
+                  );
+                })}
               </div>
             )}
           </div>

@@ -282,16 +282,104 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
 }
 
 /* Normal grid */
+/* Сетка обязана помещаться в экран целиком: прокрутки нет ни при каких
+   раскладках. Число столбцов и строк приходит из JS по числу участников
+   и реальным размерам контейнера. */
 .video-grid {
   display: grid;
   width: 100%;
   height: 100%;
   gap: 6px;
+  overflow: hidden;
   /* Отступаем от вырезов и полосы жестов: иначе подпись участника
      в нижнем углу плитки упирается в край экрана и обрезается. */
   padding: calc(6px + env(safe-area-inset-top)) calc(6px + env(safe-area-inset-right))
            calc(6px + env(safe-area-inset-bottom)) calc(6px + env(safe-area-inset-left));
-  align-content: stretch;
+}
+
+/* ── Главный + лента миниатюр (много участников или закрепление) ── */
+.speaker-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 8px;
+  padding: calc(6px + env(safe-area-inset-top)) calc(6px + env(safe-area-inset-right))
+           calc(6px + env(safe-area-inset-bottom)) calc(6px + env(safe-area-inset-left));
+}
+.speaker-main {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.speaker-main .participant-tile { width: 100%; height: 100%; }
+.speaker-strip {
+  flex: 0 0 auto;
+  height: 92px;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.speaker-strip::-webkit-scrollbar { display: none; }
+.speaker-thumb {
+  flex: 0 0 auto;
+  width: 74px;
+  height: 92px;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: 12px;
+  overflow: hidden;
+  cursor: pointer;
+}
+.speaker-thumb .participant-tile { width: 100%; height: 100%; border-radius: 12px; }
+.speaker-thumb .tile-name { font-size: 11px; padding: 2px 6px; }
+.speaker-thumb .tile-mute-btn { display: none; }
+.speaker-thumb:active { transform: scale(0.96); }
+
+/* Показываем, что главный закреплён вручную — иначе непонятно,
+   почему картинка перестала переключаться на говорящего */
+.pin-chip {
+  position: absolute;
+  top: 10px; left: 10px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.14);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* В ландшафте панель кнопок и шапка съедают высоту: лента ниже,
+   а сама панель встаёт в один ряд, чтобы не отнимать половину экрана */
+@media (orientation: landscape) and (max-height: 500px) {
+  .speaker-strip { height: 68px; }
+  .speaker-thumb { width: 56px; height: 68px; }
+  .controls-bar {
+    flex-direction: row;
+    left: 50%; right: auto;
+    transform: translateX(-50%);
+    border-radius: 999px;
+    padding: 8px 12px;
+  }
+  .controls-grid {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px;
+    max-width: none;
+  }
+  .controls-grid .ctrl-round--danger { grid-column: auto; grid-row: auto; }
+  .ctrl-round { width: 44px; height: 44px; }
+  .call-topbar { padding-top: calc(4px + env(safe-area-inset-top)); }
 }
 
 /* ── Participant tile ── */
@@ -299,6 +387,9 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
   position: relative;
   border-radius: 12px;
   overflow: hidden;
+  /* без этого элемент сетки отказывается ужиматься и выдавливает раскладку */
+  min-width: 0;
+  min-height: 0;
   background: #0a0b0d;                 /* letterbox под нестандартные пропорции */
   border: 1px solid rgba(255,255,255,0.07);
   display: flex;
@@ -309,8 +400,12 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
   width: 100%;
   height: 100%;
   object-fit: cover;
+  /* кадрируем чуть выше центра: при обрезке вертикального видео в широкой
+     ячейке иначе срезает лоб и подбородок, остаётся полоса от бровей до губ */
+  object-position: center 35%;
   display: block;
   flex: 1;
+  min-height: 0;
 }
 .tile-no-video {
   flex: 1;
@@ -1097,41 +1192,6 @@ input:-webkit-autofill:focus {
   .chat-overlay { width: 100%; left: 0; right: 0; }
   .account-panel { top: 12px; right: 12px; left: 12px; width: auto; max-width: none; }
 
-  /* Мобильная сетка видео: вертикальная лента карточек в правильных
-     пропорциях (16:9), видео показывается целиком — без обрезки и без искажений */
-  .video-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    height: 100%;
-    padding: 8px;
-    overflow-y: auto;
-  }
-  .video-grid .participant-tile {
-    width: 100%;
-    /* плитка принимает пропорцию реального видео (портрет/ландшафт),
-       пока размер не пришёл — запасное 16:9 */
-    aspect-ratio: var(--tile-aspect, 16 / 9);
-    max-height: 78vh;
-    height: auto;
-    flex: 0 0 auto;
-    border-radius: 12px;
-  }
-  .video-grid .participant-tile video {
-    object-fit: contain;
-    background: #000;
-  }
-  /* Единственный участник — не карточка в ленте, а видео во всю доступную
-     высоту: иначе полэкрана остаётся чёрным под аккуратной плиткой 16:9. */
-  .video-grid .participant-tile:only-child {
-    aspect-ratio: auto;
-    max-height: none;
-    height: 100%;
-    flex: 1 1 auto;
-  }
-  .video-grid .participant-tile:only-child video {
-    object-fit: cover;
-  }
   /* Подпись в полноэкранном слоте не должна упираться в полосу жестов */
   .pip-slot--full .tile-footer {
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
