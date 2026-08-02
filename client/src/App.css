@@ -2684,3 +2684,7 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   background: rgba(0,0,0,0.45);
   backdrop-filter: blur(14px);
 }
+
+/* во время перетаскивания анимация мешает — окно должно идти за пальцем */
+.self-pip--drag { transition: none; touch-action: none; }
+.self-pip { touch-action: none; }

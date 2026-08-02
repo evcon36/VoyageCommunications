@@ -340,7 +340,6 @@ function ScreenShareTile({ participant, isLocal }) {
 function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMuted, onToggleMute, backdrop, gridSpan, onMeta }) {
   const videoRef = useRef(null);
   const backdropRef = useRef(null);
-  const audioRef = useRef(null);
   const [hasVideo, setHasVideo] = useState(false);
   const [isMicOff, setIsMicOff] = useState(false);
   const [isCamOff, setIsCamOff] = useState(false);
@@ -619,11 +618,10 @@ export default function App() {
 
   // PiP 1-на-1 (телефон/планшет): большой собеседник + перетаскиваемая своя камера
   const [isTouchDevice, setIsTouchDevice] = useState(false);
-  const [pipSelfBig, setPipSelfBig] = useState(false);
-  const [pipThumb, setPipThumb] = useState({ x: 16, y: 16 });
-  const [pipDragging, setPipDragging] = useState(false);
-  const [pipStageSize, setPipStageSize] = useState({ w: 0, h: 0 });
-  const pipStageRef = useRef(null);
+  // Положение своего плавающего окна: null = «ещё не трогали», встаёт
+  // в правый нижний угол автоматически
+  const [selfPos, setSelfPos] = useState(null);
+  const [selfDragging, setSelfDragging] = useState(false);
 
   // Реакции-эмодзи
   const [isReactionsOpen, setIsReactionsOpen] = useState(false);
@@ -2260,35 +2258,36 @@ export default function App() {
   }, []);
 
   const PIP_MARGIN = 12;
-  const pipThumbSize = () => {
-    const w = Math.min(0.34 * window.innerWidth, 132);
-    return { w, h: Math.round(w * 1.45) };
-  };
-  // перетаскивание плашки + тап = смена местами (различаем по смещению)
-  const onPipThumbDown = (e) => {
+  const SELF_W = 104, SELF_H = 148;
+  // Перетаскивание своего окна. Тап отличаем от перетаскивания по смещению:
+  // сдвинули меньше пяти пикселей — считаем тапом и увеличиваем окно.
+  const onSelfPointerDown = (e) => {
+    if (selfBig) return;                       // увеличенное окно не таскаем
     e.stopPropagation();
-    const el = pipStageRef.current;
+    const el = stageRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const { w, h } = pipThumbSize();
-    const start = { x: e.clientX, y: e.clientY, ox: pipThumb.x, oy: pipThumb.y, moved: false };
-    setPipDragging(true);
-    const clamp = (v, max) => Math.min(Math.max(PIP_MARGIN, v), max - PIP_MARGIN);
+    const base = selfPos || { x: r.width - SELF_W - PIP_MARGIN, y: r.height - SELF_H - 150 };
+    const start = { x: e.clientX, y: e.clientY, ox: base.x, oy: base.y, moved: false };
+    setSelfDragging(true);
+    const clampX = v => Math.min(Math.max(PIP_MARGIN, v), r.width - SELF_W - PIP_MARGIN);
+    const clampY = v => Math.min(Math.max(PIP_MARGIN, v), r.height - SELF_H - PIP_MARGIN);
     const move = (ev) => {
       const dx = ev.clientX - start.x, dy = ev.clientY - start.y;
       if (Math.abs(dx) > 5 || Math.abs(dy) > 5) start.moved = true;
-      setPipThumb({ x: clamp(start.ox + dx, r.width - w), y: clamp(start.oy + dy, r.height - h) });
+      setSelfPos({ x: clampX(start.ox + dx), y: clampY(start.oy + dy) });
     };
     const up = (ev) => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      setPipDragging(false);
-      if (!start.moved) { setPipSelfBig(v => !v); return; }
-      const lx = clamp(start.ox + (ev.clientX - start.x), r.width - w);
-      const ly = clamp(start.oy + (ev.clientY - start.y), r.height - h);
-      setPipThumb({
-        x: lx < (r.width - w) / 2 ? PIP_MARGIN : r.width - w - PIP_MARGIN,
-        y: ly < (r.height - h) / 2 ? PIP_MARGIN : r.height - h - PIP_MARGIN,
+      setSelfDragging(false);
+      if (!start.moved) { setSelfBig(true); return; }
+      // после отпускания прилипаем к ближайшему углу
+      const lx = clampX(start.ox + (ev.clientX - start.x));
+      const ly = clampY(start.oy + (ev.clientY - start.y));
+      setSelfPos({
+        x: lx < (r.width - SELF_W) / 2 ? PIP_MARGIN : r.width - SELF_W - PIP_MARGIN,
+        y: ly < (r.height - SELF_H) / 2 ? PIP_MARGIN : r.height - SELF_H - PIP_MARGIN,
       });
     };
     window.addEventListener('pointermove', move);
@@ -2366,47 +2365,16 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allParticipants, renderTick]);
 
-  // Раскладка 1-на-1 для тач-устройств: большой собеседник + плавающая своя камера
-  const pipLocal = livekitRoomRef.current?.localParticipant;
-  const pipRemote = allParticipants.find(p => p !== pipLocal);
-  const usePip = Boolean(isTouchDevice && allParticipants.length === 2 && !screenSharePresenter && pipRemote);
-
-  // размеры сцены PiP (для плавной анимации в px)
+  // Позиция своего окна хранится в пикселях. При повороте экрана сцена
+  // меняет размеры, и старые координаты уводили окно за границу — оно
+  // просто пропадало из виду. Поэтому возвращаем его в видимую область.
   useEffect(() => {
-    if (!usePip) return;
-    const el = pipStageRef.current;
-    if (!el) return;
-    const measure = () => {
-      const r = el.getBoundingClientRect();
-      if (!r.width || !r.height) return;
-      setPipStageSize({ w: r.width, h: r.height });
-      // Позиция плашки хранится в пикселях. При повороте экрана (портрет↔ландшафт)
-      // сцена меняет размеры, и старые координаты уводили свою камеру за границу —
-      // она просто пропадала из виду. Поэтому на каждое изменение размера
-      // возвращаем плашку в видимую область.
-      const { w, h } = pipThumbSize();
-      setPipThumb((prev) => ({
-        x: Math.min(Math.max(PIP_MARGIN, prev.x), Math.max(PIP_MARGIN, r.width - w - PIP_MARGIN)),
-        y: Math.min(Math.max(PIP_MARGIN, prev.y), Math.max(PIP_MARGIN, r.height - h - PIP_MARGIN)),
-      }));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [usePip]);
-
-  // при входе в 1-на-1: своя камера — маленькой плашкой в правом нижнем углу
-  useEffect(() => {
-    if (!usePip) return;
-    const el = pipStageRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const { w, h } = pipThumbSize();
-    setPipThumb({ x: r.width - w - PIP_MARGIN, y: r.height - h - PIP_MARGIN });
-    setPipSelfBig(false);
+    if (!selfPos || !stageSize.w || !stageSize.h) return;
+    const x = Math.min(Math.max(PIP_MARGIN, selfPos.x), Math.max(PIP_MARGIN, stageSize.w - SELF_W - PIP_MARGIN));
+    const y = Math.min(Math.max(PIP_MARGIN, selfPos.y), Math.max(PIP_MARGIN, stageSize.h - SELF_H - PIP_MARGIN));
+    if (x !== selfPos.x || y !== selfPos.y) setSelfPos({ x, y });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usePip]);
+  }, [stageSize.w, stageSize.h]);
 
   if (!authChecked) return <div className="auth-page">Проверяем авторизацию...</div>;
 
@@ -4038,8 +4006,10 @@ export default function App() {
               <>
                 {selfBig && <div className="self-scrim" onClick={(e) => { e.stopPropagation(); setSelfBig(false); }} />}
                 <div
-                  className={`self-pip${selfBig ? ' self-pip--big' : ''}`}
-                  onClick={(e) => { e.stopPropagation(); setSelfBig(v => !v); }}
+                  className={`self-pip${selfBig ? ' self-pip--big' : ''}${selfDragging ? ' self-pip--drag' : ''}`}
+                  style={!selfBig && selfPos ? { left: selfPos.x, top: selfPos.y, right: 'auto', bottom: 'auto' } : undefined}
+                  onPointerDown={onSelfPointerDown}
+                  onClick={(e) => { e.stopPropagation(); if (selfBig) setSelfBig(false); }}
                 >
                   <ParticipantTile participant={localP} isLocal isFrontCamera={isFrontCamera} onMeta={onTileMeta} />
                 </div>
