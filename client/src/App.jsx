@@ -568,7 +568,9 @@ export default function App() {
   const [roomId, setRoomId] = useState(() =>
     new URLSearchParams(window.location.search).get('room') || '');
   const inviteKeyRef = useRef(new URLSearchParams(window.location.search).get('key') || null);
-  const [userName, setUserName] = useState('Иван');
+  // Пустое: человеку без аккаунта нечего подставлять, а чужое имя в поле
+  // он не заметит и войдёт в звонок под ним
+  const [userName, setUserName] = useState('');
 
   // ── Гостевой вход по ссылке (без аккаунта) ──
   // Пускаем только по полной ссылке-приглашению: нужен и номер комнаты, и ключ.
@@ -2056,8 +2058,12 @@ export default function App() {
       const tokenTimeout = setTimeout(() => tokenController.abort(), 15000);
       let resp;
       try {
-        // гость идёт по отдельному маршруту: без аккаунта, строго по ключу из ссылки
-        resp = guestMode
+        // Маршрут выбирается по наличию аккаунта, а не по тому, пришёл ли
+        // человек по ссылке. Раньше здесь стоял guestMode, который включался
+        // только у пришедших по приглашению: тот, кто просто открыл приложение
+        // и ввёл ID комнаты, уходил на маршрут для авторизованных с пустым
+        // токеном и получал «недействительный токен».
+        resp = !authUser
           ? await apiFetch(`/rooms/guest-token`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2105,7 +2111,7 @@ export default function App() {
           roomId: slug,
           name: userName.trim(),
           // у гостя нет аккаунта — представляемся временным id, его же проверит сервер
-          userId: guestMode ? guestIdRef.current : authUser?.id,
+          userId: authUser?.id || guestIdRef.current,
         });
         return;
       }
@@ -2119,7 +2125,18 @@ export default function App() {
           return;
         }
         joiningRef.current = false;
-        setStatus(`Ошибка: ${err.message}`);
+        // Без аккаунта в чужую комнату пускает только полная ссылка. По одному
+        // ID комнаты сервер откажет, и человеку надо объяснить, что просить у
+        // того, кто его позвал, а не показывать служебный текст.
+        if (resp.status === 403 && !authUser && !key) {
+          setStatus('Для входа без аккаунта нужна полная ссылка-приглашение. Попросите прислать её целиком');
+        } else if (resp.status === 410) {
+          setStatus('Время бесплатной комнаты вышло. Попросите создать новую');
+        } else if (resp.status === 409 && err.reason === 'full') {
+          setStatus(err.message);
+        } else {
+          setStatus(`Ошибка: ${err.message}`);
+        }
         return;
       }
 
