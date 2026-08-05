@@ -161,7 +161,7 @@ export default function LoginForm({ onLoginSuccess, onSwitchToRegister }) {
     <form className="auth-form" onSubmit={handleSubmit}>
       <div className="auth-form-head">
         <h2>Вход</h2>
-        <p>Войдите в аккаунт, чтобы открыть доступ к видеозвонкам.</p>
+        <p>Звонки работают и без аккаунта. Аккаунт добавляет контакты, запись разговоров и историю.</p>
       </div>
 
       {error && <div className="auth-alert auth-alert-error">{error}</div>}

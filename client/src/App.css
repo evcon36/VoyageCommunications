@@ -2802,3 +2802,20 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 
 /* Своя плитка в сетке нажимается: подсказываем это курсором */
 .participant-tile--tappable { cursor: pointer; }
+
+/* Вход больше не стена на пороге: кнопка зовёт внутрь, а не преграждает */
+.header-login-btn { padding: 8px 20px; font-size: 14px; }
+.auth-back {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top));
+  left: 14px;
+  z-index: 5;
+  padding: 8px 16px;
+  border: 1px solid var(--line, rgba(244,241,234,.13));
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.auth-back:hover { background: rgba(255,255,255,.06); }

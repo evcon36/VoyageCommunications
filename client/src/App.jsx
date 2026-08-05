@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { io } from 'socket.io-client';
-import { Room, RoomEvent, Track, ConnectionQuality } from 'livekit-client';
+import { LK, loadLiveKit, prefetchLiveKit } from './livekit';
 // @livekit/track-processors загружается лениво при включении размытия —
 // статический импорт ломает старт на части браузеров (WASM-инициализация)
 import './App.css';
@@ -306,7 +306,7 @@ function RemoteAudio({ participant, volume = 1, localMuted = false }) {
     const el = audioRef.current;
     let attached = null;
     const attach = () => {
-      const audioPub = participant.getTrackPublication(Track.Source.Microphone);
+      const audioPub = participant.getTrackPublication(LK.Track.Source.Microphone);
       if (audioPub?.track && audioPub.isSubscribed && el) {
         audioPub.track.attach(el);
         attached = audioPub.track;
@@ -343,7 +343,7 @@ function ScreenShareTile({ participant, isLocal }) {
     let attached = null;
 
     const attach = () => {
-      const pub = participant.getTrackPublication(Track.Source.ScreenShare);
+      const pub = participant.getTrackPublication(LK.Track.Source.ScreenShare);
       const track = pub?.track && (isLocal || pub.isSubscribed) ? pub.track : null;
       if (track && videoRef.current && attached !== track) {
         if (attached) attached.detach(videoRef.current);
@@ -424,8 +424,8 @@ function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMute
     let attached = null;
 
     const updateState = () => {
-      const cameraPub = participant.getTrackPublication(Track.Source.Camera);
-      const micPub = participant.getTrackPublication(Track.Source.Microphone);
+      const cameraPub = participant.getTrackPublication(LK.Track.Source.Camera);
+      const micPub = participant.getTrackPublication(LK.Track.Source.Microphone);
 
       const camTrack = cameraPub?.track && (isLocal || cameraPub.isSubscribed) ? cameraPub.track : null;
       const camMuted = cameraPub ? cameraPub.isMuted : true;
@@ -482,7 +482,7 @@ function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMute
   useEffect(() => {
     const bg = backdropRef.current;
     if (!backdrop || !bg || !participant) return;
-    const pub = participant.getTrackPublication(Track.Source.Camera);
+    const pub = participant.getTrackPublication(LK.Track.Source.Camera);
     const track = pub?.track && (isLocal || pub.isSubscribed) && !pub.isMuted ? pub.track : null;
     if (track) { try { track.attach(bg); } catch {} }
     return () => { if (track) { try { track.detach(bg); } catch {} } };
@@ -565,6 +565,7 @@ export default function App() {
   }).current;
   const hasGuestInvite = Boolean(guestInvite.room && guestInvite.key);
   const [guestMode, setGuestMode] = useState(false);   // вошли как гость
+  const [showAuth, setShowAuth] = useState(false);     // человек сам нажал «Войти»
   const [guestDismissed, setGuestDismissed] = useState(false); // выбрали «войти в аккаунт»
   const [guestNameInput, setGuestNameInput] = useState('');
   const [guestBusy, setGuestBusy] = useState(false);
@@ -1541,6 +1542,10 @@ export default function App() {
 
   useEffect(() => { if (authUser) fetchContacts(); }, [authUser, fetchContacts]);
 
+  // Медиадвижок тянем фоном сразу после первого экрана: к моменту входа в
+  // звонок он обычно уже на месте, а первый экран его не ждёт.
+  useEffect(() => { prefetchLiveKit(); }, []);
+
   // Глобальный поиск людей (с задержкой при вводе)
   useEffect(() => {
     const q = contactSearch.trim();
@@ -1923,7 +1928,10 @@ export default function App() {
   // Гость подтвердил имя — сразу заводим его в звонок, без промежуточного экрана.
   // userName к этому моменту уже проставлен (пустая строка = сервер даст «Гость N»).
   useEffect(() => {
-    if (!guestMode || joined || joiningRef.current) return;
+    // Гостевой режим теперь бывает и без приглашения: человек просто открыл
+    // приложение. Автовход выполняем только когда пришли по ссылке, иначе
+    // дёргали бы вход в пустую комнату.
+    if (!guestMode || !hasGuestInvite || joined || joiningRef.current) return;
     joinRoomWith(guestInvite.room, guestInvite.key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [guestMode]);
@@ -2042,7 +2050,17 @@ export default function App() {
         ? ice
         : [{ urls: 'stun:stun.l.google.com:19302' }];
 
-      const room = new Room({
+      // Движок грузится отдельно от приложения, обычно он уже подтянут фоном.
+      // Если сеть рвётся, ждём здесь: без него комнату не создать.
+      try {
+        await loadLiveKit();
+      } catch {
+        setStatus('Не удалось загрузить видеосвязь. Проверьте интернет и попробуйте снова');
+        joiningRef.current = false;
+        return;
+      }
+
+      const room = new LK.Room({
         adaptiveStream: true,
         dynacast: true,
         videoCaptureDefaults: {
@@ -2082,7 +2100,7 @@ export default function App() {
       });
       livekitRoomRef.current = room;
 
-      room.on(RoomEvent.Connected, () => {
+      room.on(LK.RoomEvent.Connected, () => {
         joiningRef.current = false;
         setJoined(true);
         setCallStartedAt(Date.now());
@@ -2093,7 +2111,7 @@ export default function App() {
         forceUpdate();
       });
 
-      room.on(RoomEvent.Disconnected, () => {
+      room.on(LK.RoomEvent.Disconnected, () => {
         joiningRef.current = false;
         setJoined(false);
         setCallStartedAt(null);
@@ -2117,16 +2135,16 @@ export default function App() {
         forceUpdate();
       });
       // Пока LiveKit сам восстанавливает связь, картинка замирала молча
-      room.on(RoomEvent.Reconnecting, () => setStatus('Восстанавливаем связь...'));
-      room.on(RoomEvent.Reconnected, () => setStatus('Связь восстановлена'));
+      room.on(LK.RoomEvent.Reconnecting, () => setStatus('Восстанавливаем связь...'));
+      room.on(LK.RoomEvent.Reconnected, () => setStatus('Связь восстановлена'));
 
-      room.on(RoomEvent.ParticipantConnected, (p) => {
+      room.on(LK.RoomEvent.ParticipantConnected, (p) => {
         setStatus(`${displayName(p)} подключился`);
         playChime(true);
         forceUpdate();
       });
 
-      room.on(RoomEvent.ParticipantDisconnected, (p) => {
+      room.on(LK.RoomEvent.ParticipantDisconnected, (p) => {
         setStatus(`${displayName(p)} отключился`);
         playChime(false);
         forceUpdate();
@@ -2140,35 +2158,35 @@ export default function App() {
       });
 
       // подсветка говорящих + своё качество соединения
-      room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+      room.on(LK.RoomEvent.ActiveSpeakersChanged, (speakers) => {
         // Запоминаем последнего говорившего не из числа своих: по нему режим
         // «главный + лента» выбирает, кого показать крупно.
         const s = (speakers || []).find(p => p !== room.localParticipant);
         if (s) setLastSpeakerId(s.identity);
         forceUpdate();
       });
-      room.on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
+      room.on(LK.RoomEvent.ConnectionQualityChanged, (quality, participant) => {
         if (participant === room.localParticipant) {
           setConnQuality(
-            quality === ConnectionQuality.Excellent ? 'excellent'
-            : quality === ConnectionQuality.Good ? 'good' : 'poor');
+            quality === LK.ConnectionQuality.Excellent ? 'excellent'
+            : quality === LK.ConnectionQuality.Good ? 'good' : 'poor');
         }
       });
 
       // Публикация и снятие публикации — то, по чему раскладка решает, есть
       // у человека камера или он уходит квадратиком вниз. Без этих двух
       // событий участник, включивший камеру позже всех, оставался внизу.
-      room.on(RoomEvent.TrackPublished, forceUpdate);
-      room.on(RoomEvent.TrackUnpublished, forceUpdate);
-      room.on(RoomEvent.TrackSubscribed, forceUpdate);
-      room.on(RoomEvent.TrackUnsubscribed, forceUpdate);
-      room.on(RoomEvent.LocalTrackPublished, forceUpdate);
-      room.on(RoomEvent.LocalTrackUnpublished, forceUpdate);
-      room.on(RoomEvent.TrackMuted, forceUpdate);
-      room.on(RoomEvent.TrackUnmuted, forceUpdate);
+      room.on(LK.RoomEvent.TrackPublished, forceUpdate);
+      room.on(LK.RoomEvent.TrackUnpublished, forceUpdate);
+      room.on(LK.RoomEvent.TrackSubscribed, forceUpdate);
+      room.on(LK.RoomEvent.TrackUnsubscribed, forceUpdate);
+      room.on(LK.RoomEvent.LocalTrackPublished, forceUpdate);
+      room.on(LK.RoomEvent.LocalTrackUnpublished, forceUpdate);
+      room.on(LK.RoomEvent.TrackMuted, forceUpdate);
+      room.on(LK.RoomEvent.TrackUnmuted, forceUpdate);
 
       // пока идёт запись — шлём серверу, кто говорит (для разметки транскрипта по никам)
-      room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+      room.on(LK.RoomEvent.ActiveSpeakersChanged, (speakers) => {
         if (!recActiveRef.current) return;
         const s = speakers && speakers[0];
         if (s) socket.emit('rec-speaker', { roomId: roomIdRef.current, speaker: displayName(s) });
@@ -2326,7 +2344,7 @@ export default function App() {
     const facingMode = nextFront ? 'user' : 'environment';
 
     try {
-      const pub = room.localParticipant.getTrackPublication(Track.Source.Camera);
+      const pub = room.localParticipant.getTrackPublication(LK.Track.Source.Camera);
       const track = pub?.track;
       if (track && typeof track.restartTrack === 'function') {
         // перезапуск существующего трека с новой камерой — надёжно на мобильных
@@ -2390,7 +2408,7 @@ export default function App() {
   const toggleBlur = async () => {
     const room = livekitRoomRef.current;
     if (!room || blurBusy) return;
-    const pub = room.localParticipant.getTrackPublication(Track.Source.Camera);
+    const pub = room.localParticipant.getTrackPublication(LK.Track.Source.Camera);
     const track = pub?.track;
     if (!track) { setStatus('Сначала включите камеру'); return; }
     setBlurBusy(true);
@@ -2595,7 +2613,7 @@ export default function App() {
   useEffect(() => {
     if (!pinnedId) return;
     const p = allParticipants.find(x => x.identity === pinnedId);
-    const camOn = p && Boolean(p.getTrackPublication(Track.Source.Camera)) && !p.getTrackPublication(Track.Source.Camera).isMuted;
+    const camOn = p && Boolean(p.getTrackPublication(LK.Track.Source.Camera)) && !p.getTrackPublication(LK.Track.Source.Camera).isMuted;
     if (!p || !camOn) setPinnedId(null);
   }, [allParticipants, pinnedId, renderTick]);
 
@@ -2632,7 +2650,7 @@ export default function App() {
   // исчезал, adaptiveStream переставал подписывать поток — и человек навсегда
   // оставался квадратиком внизу, хотя камера у него работала.
   const hasCameraOn = (p) => {
-    const pub = p.getTrackPublication(Track.Source.Camera);
+    const pub = p.getTrackPublication(LK.Track.Source.Camera);
     return Boolean(pub) && !pub.isMuted;
   };
   // Выключенная камера уходит из сетки вниз маленьким квадратом: она не
@@ -2673,7 +2691,7 @@ export default function App() {
   // Find participant with active screen share
   const screenSharePresenter = useMemo(() => {
     return allParticipants.find(p => {
-      const pub = p.getTrackPublication(Track.Source.ScreenShare);
+      const pub = p.getTrackPublication(LK.Track.Source.ScreenShare);
       return pub?.track && (p === livekitRoomRef.current?.localParticipant || pub.isSubscribed) && !pub.isMuted;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2822,8 +2840,10 @@ export default function App() {
     );
   }
 
-  // гостя дальше пропускаем: аккаунта у него нет, но доступ к звонку есть
-  if (!authUser && !guestMode) {
+  // Стены логина больше нет. Приложение открыто всем: аккаунт добавляет
+  // возможности, а не открывает дверь. Экран входа показывается только по
+  // явному нажатию «Войти» и имеет кнопку возврата.
+  if (!authUser && showAuth) {
     return (
       <AuthPage
         onLoginSuccess={(user) => {
@@ -2831,7 +2851,9 @@ export default function App() {
           setUserName(user.displayName || user.username || 'Иван');
           setRoomId(prev => prev || `${user.username}-${Math.floor(100 + Math.random() * 900)}`);
           setAuthError('');
+          setShowAuth(false);
         }}
+        onBack={() => setShowAuth(false)}
         authError={authError}
       />
     );
@@ -4074,7 +4096,7 @@ export default function App() {
                 <button className="ghost-btn logout-btn" onClick={() => { if (joined) leaveCall(); window.location.href = BASE; }}>
                   Выйти
                 </button>
-              ) : (
+              ) : authUser ? (
                 <>
                   <button className="ghost-btn account-toggle-btn" onClick={() => setIsAccountPanelOpen(p => !p)}><Icon name="menu" size={16} /> Аккаунт</button>
                   <button className="ghost-btn logout-btn" onClick={() => {
@@ -4083,6 +4105,12 @@ export default function App() {
                     if (joined) leaveCall();
                   }}>Выйти</button>
                 </>
+              ) : (
+                // Без аккаунта выходить неоткуда: вместо «Выйти» зовём внутрь,
+                // и это единственное место, откуда открывается экран входа
+                <button className="primary-btn header-login-btn" onClick={() => setShowAuth(true)}>
+                  Войти
+                </button>
               )}
             </div>
           </div>
