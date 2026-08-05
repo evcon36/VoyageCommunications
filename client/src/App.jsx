@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { LK, loadLiveKit, prefetchLiveKit } from './livekit';
+import { serverUrl, apiFetch, mediaOrigin, onOriginChange } from './net';
 // @livekit/track-processors загружается лениво при включении размытия —
 // статический импорт ломает старт на части браузеров (WASM-инициализация)
 import './App.css';
@@ -9,7 +10,6 @@ import AuthPage from './components/AuthPage';
 import { getMe } from './services/auth';
 import { getAltDomainUrl, ALT_DOMAIN_HINT, buildInviteLink } from './altDomain';
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:4000';
 const BASE = import.meta.env.VITE_BASE_PATH || '/communications/';
 
 // iPad с iPadOS 13+ представляется как MacIntel, поэтому проверяем ещё и тачи.
@@ -18,7 +18,20 @@ const IS_IOS = typeof navigator !== 'undefined' && (
   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 );
 
-const socket = io(SERVER_URL, { transports: ['websocket', 'polling'] });
+const socket = io(serverUrl(), { transports: ['websocket', 'polling'] });
+
+// Если запросы к серверу переехали на другой вход, сокет обязан переехать
+// следом. Иначе получается худший случай: приложение живо, экраны работают,
+// а звонки не доходят, потому что сокет висит на мёртвом адресе.
+onOriginChange((origin) => {
+  try {
+    socket.io.uri = origin;
+    socket.io.opts.host = undefined;   // иначе socket.io соберёт адрес из старых частей
+    socket.disconnect().connect();
+  } catch (e) {
+    console.error('Не удалось перевести сокет на новый адрес:', e?.message);
+  }
+});
 
 // identity приходит с суффиксом (#a1b2) для уникальности устройств,
 // отображаем человеку только имя
@@ -104,7 +117,7 @@ function Select({ value, onChange, options, placeholder, className = '', size = 
 // указывал бы внутрь бандла — картинки не находились. Достраиваем явно.
 function mediaUrl(path) {
   if (!path) return path;
-  return /^(https?:|data:|blob:)/.test(path) ? path : `${SERVER_URL}${path}`;
+  return /^(https?:|data:|blob:)/.test(path) ? path : `${mediaOrigin()}${path}`;
 }
 
 function Avatar({ url, name, className = 'company-member-avatar' }) {
@@ -781,7 +794,7 @@ export default function App() {
     if (!token) return;
     setHistoryLoading(true);
     try {
-      const resp = await fetch(`${SERVER_URL}/rooms/history`, { headers: { Authorization: `Bearer ${token}` } });
+      const resp = await apiFetch(`/rooms/history`, { headers: { Authorization: `Bearer ${token}` } });
       if (resp.ok) {
         const data = await resp.json();
         setCallHistory(data.sessions || []);
@@ -802,7 +815,7 @@ export default function App() {
     try {
       const token = localStorage.getItem('token');
       const path = recActive ? '/recordings/stop' : '/recordings/start';
-      const resp = await fetch(`${SERVER_URL}${path}`, {
+      const resp = await apiFetch(`${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ roomId: roomIdRef.current }),
@@ -828,7 +841,7 @@ export default function App() {
   const checkRecordingStatus = useCallback(async (rid) => {
     try {
       const token = localStorage.getItem('token');
-      const resp = await fetch(`${SERVER_URL}/recordings/status/${encodeURIComponent(rid)}`, {
+      const resp = await apiFetch(`/recordings/status/${encodeURIComponent(rid)}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (resp.ok) {
@@ -844,7 +857,7 @@ export default function App() {
     if (!token) return;
     setRecordingsLoading(true);
     try {
-      const resp = await fetch(`${SERVER_URL}/recordings/my`, { headers: { Authorization: `Bearer ${token}` } });
+      const resp = await apiFetch(`/recordings/my`, { headers: { Authorization: `Bearer ${token}` } });
       if (resp.ok) {
         const data = await resp.json();
         setMyRecordings(data.recordings || []);
@@ -862,7 +875,7 @@ export default function App() {
     const token = localStorage.getItem('token');
     const iv = setInterval(async () => {
       try {
-        const r = await fetch(`${SERVER_URL}/recordings/${recId}/transcript`, { headers: { Authorization: `Bearer ${token}` } });
+        const r = await apiFetch(`/recordings/${recId}/transcript`, { headers: { Authorization: `Bearer ${token}` } });
         const d = await r.json();
         const value = field === 'aiStatus' ? d.aiStatus : field === 'summaryStatus' ? d.summaryStatus : d.status;
         if (value === 'done' || value === 'failed') {
@@ -901,7 +914,7 @@ export default function App() {
   const requestSummary = async (recId) => {
     const token = localStorage.getItem('token');
     try {
-      const resp = await fetch(`${SERVER_URL}/recordings/${recId}/summary`, {
+      const resp = await apiFetch(`/recordings/${recId}/summary`, {
         method: 'POST', headers: { Authorization: `Bearer ${token}` },
       });
       if (resp.status === 202) {
@@ -933,7 +946,7 @@ export default function App() {
   const enhanceTranscript = async (recId) => {
     const token = localStorage.getItem('token');
     try {
-      const resp = await fetch(`${SERVER_URL}/recordings/${recId}/enhance`, {
+      const resp = await apiFetch(`/recordings/${recId}/enhance`, {
         method: 'POST', headers: { Authorization: `Bearer ${token}` },
       });
       if (resp.status === 202) {
@@ -965,7 +978,7 @@ export default function App() {
     setDelOpen(true);
     try {
       const token = localStorage.getItem('token');
-      const r = await fetch(`${SERVER_URL}/auth/account/deletion-preview`, {
+      const r = await apiFetch(`/auth/account/deletion-preview`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (r.ok) setDelPreview(await r.json());
@@ -977,7 +990,7 @@ export default function App() {
     setDelError('');
     try {
       const token = localStorage.getItem('token');
-      const r = await fetch(`${SERVER_URL}/auth/account/delete`, {
+      const r = await apiFetch(`/auth/account/delete`, {
         method: 'POST', headers: { Authorization: `Bearer ${token}` },
       });
       const d = await r.json().catch(() => ({}));
@@ -1000,7 +1013,7 @@ export default function App() {
     setDelBusy(true);
     try {
       const token = localStorage.getItem('token');
-      const r = await fetch(`${SERVER_URL}/auth/account/restore`, {
+      const r = await apiFetch(`/auth/account/restore`, {
         method: 'POST', headers: { Authorization: `Bearer ${token}` },
       });
       if (r.ok) setAuthUser(u => (u ? { ...u, deletionRequestedAt: null, purgeAt: null } : u));
@@ -1014,7 +1027,7 @@ export default function App() {
   const downloadRecording = async (recId) => {
     const token = localStorage.getItem('token');
     try {
-      const resp = await fetch(`${SERVER_URL}/recordings/${recId}/link`, {
+      const resp = await apiFetch(`/recordings/${recId}/link`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const d = await resp.json().catch(() => ({}));
@@ -1023,7 +1036,7 @@ export default function App() {
         setTimeout(() => setProfileMsg(''), 3500);
         return;
       }
-      window.location.href = `${SERVER_URL}${d.url}`;
+      window.location.href = `${mediaOrigin()}${d.url}`;
     } catch {
       setProfileMsg('Ошибка сети');
       setTimeout(() => setProfileMsg(''), 3000);
@@ -1033,7 +1046,7 @@ export default function App() {
   const startTranscribe = async (recId) => {
     const token = localStorage.getItem('token');
     try {
-      const resp = await fetch(`${SERVER_URL}/recordings/${recId}/transcribe`, {
+      const resp = await apiFetch(`/recordings/${recId}/transcribe`, {
         method: 'POST', headers: { Authorization: `Bearer ${token}` },
       });
       if (resp.status === 202) {
@@ -1056,7 +1069,7 @@ export default function App() {
     if (!token) return;
     setCompaniesLoading(true);
     try {
-      const resp = await fetch(`${SERVER_URL}/companies/my`, { headers: { Authorization: `Bearer ${token}` } });
+      const resp = await apiFetch(`/companies/my`, { headers: { Authorization: `Bearer ${token}` } });
       if (resp.ok) { const d = await resp.json(); setCompanies(d.companies || []); }
     } catch {}
     finally { setCompaniesLoading(false); }
@@ -1108,7 +1121,7 @@ export default function App() {
     if (name.length < 2) { setProfileMsg('Название: минимум 2 символа'); setTimeout(() => setProfileMsg(''), 2500); return; }
     const token = localStorage.getItem('token');
     try {
-      const resp = await fetch(`${SERVER_URL}/companies`, {
+      const resp = await apiFetch(`/companies`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ name }),
       });
@@ -1124,7 +1137,7 @@ export default function App() {
     if (!uname) return;
     const token = localStorage.getItem('token');
     try {
-      const resp = await fetch(`${SERVER_URL}/companies/${slug}/invite`, {
+      const resp = await apiFetch(`/companies/${slug}/invite`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ username: uname, role: 'member' }),
       });
@@ -1138,7 +1151,7 @@ export default function App() {
   const removeCompanyMember = async (slug, username) => {
     const token = localStorage.getItem('token');
     try {
-      await fetch(`${SERVER_URL}/companies/${slug}/members/${encodeURIComponent(username)}`, {
+      await apiFetch(`/companies/${slug}/members/${encodeURIComponent(username)}`, {
         method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
       });
       fetchCompanies();
@@ -1148,7 +1161,7 @@ export default function App() {
   const setCompanyAccent = async (slug, accent) => {
     const token = localStorage.getItem('token');
     try {
-      const resp = await fetch(`${SERVER_URL}/companies/${slug}`, {
+      const resp = await apiFetch(`/companies/${slug}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ accent }),
       });
@@ -1159,7 +1172,7 @@ export default function App() {
   const deleteCompany = async (slug) => {
     const token = localStorage.getItem('token');
     try {
-      const resp = await fetch(`${SERVER_URL}/companies/${slug}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      const resp = await apiFetch(`/companies/${slug}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
       if (resp.ok) setCompanies(prev => prev.filter(c => c.slug !== slug));
     } catch {}
   };
@@ -1190,12 +1203,12 @@ export default function App() {
 
   const apiGet = async (path) => {
     const token = localStorage.getItem('token');
-    const r = await fetch(`${SERVER_URL}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+    const r = await apiFetch(`${path}`, { headers: { Authorization: `Bearer ${token}` } });
     return r.ok ? r.json() : null;
   };
   const apiSend = async (path, method, body) => {
     const token = localStorage.getItem('token');
-    const r = await fetch(`${SERVER_URL}${path}`, {
+    const r = await apiFetch(`${path}`, {
       method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: body ? JSON.stringify(body) : undefined,
     });
@@ -1370,7 +1383,7 @@ export default function App() {
     try {
       // Раньше ответ сервера не проверялся: при отказе (не владелец комнаты)
       // человек всё равно видел «удалён», а участник оставался в звонке.
-      const resp = await fetch(`${SERVER_URL}/rooms/moderate`, {
+      const resp = await apiFetch(`/rooms/moderate`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ roomId: roomIdRef.current, targetIdentity: identity, action: 'remove' }),
       });
@@ -1388,7 +1401,7 @@ export default function App() {
     if (!token) return;
     setMyRoomsLoading(true);
     try {
-      const resp = await fetch(`${SERVER_URL}/rooms/my`, { headers: { Authorization: `Bearer ${token}` } });
+      const resp = await apiFetch(`/rooms/my`, { headers: { Authorization: `Bearer ${token}` } });
       if (resp.ok) {
         const data = await resp.json();
         setMyRooms(data.rooms || []);
@@ -1404,7 +1417,7 @@ export default function App() {
   const deleteRoom = async (slug) => {
     try {
       const token = localStorage.getItem('token');
-      const resp = await fetch(`${SERVER_URL}/rooms/${encodeURIComponent(slug)}`, {
+      const resp = await apiFetch(`/rooms/${encodeURIComponent(slug)}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -1427,7 +1440,7 @@ export default function App() {
     if (!name) return;
     try {
       const token = localStorage.getItem('token');
-      const resp = await fetch(`${SERVER_URL}/auth/profile`, {
+      const resp = await apiFetch(`/auth/profile`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ display_name: name }),
@@ -1462,7 +1475,7 @@ export default function App() {
       URL.revokeObjectURL(img.src);
       try {
         const token = localStorage.getItem('token');
-        const resp = await fetch(`${SERVER_URL}/auth/avatar`, {
+        const resp = await apiFetch(`/auth/avatar`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify({ dataUrl }),
@@ -1488,7 +1501,7 @@ export default function App() {
     const timer = setTimeout(async () => {
       try {
         const token = localStorage.getItem('token');
-        const resp = await fetch(`${SERVER_URL}/rooms/info/${encodeURIComponent(roomId.trim())}`, {
+        const resp = await apiFetch(`/rooms/info/${encodeURIComponent(roomId.trim())}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (resp.ok) {
@@ -1506,7 +1519,7 @@ export default function App() {
 
   const createGuestRoom = async () => {
     try {
-      const resp = await fetch(`${SERVER_URL}/rooms/guest-create`, {
+      const resp = await apiFetch(`/rooms/guest-create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1534,7 +1547,7 @@ export default function App() {
     if (!authUser) return createGuestRoom();
     try {
       const token = localStorage.getItem('token');
-      const resp = await fetch(`${SERVER_URL}/rooms/create`, {
+      const resp = await apiFetch(`/rooms/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -1563,7 +1576,7 @@ export default function App() {
     const token = localStorage.getItem('token');
     if (!token) return;
     try {
-      const resp = await fetch(`${SERVER_URL}/contacts`, { headers: { Authorization: `Bearer ${token}` } });
+      const resp = await apiFetch(`/contacts`, { headers: { Authorization: `Bearer ${token}` } });
       if (resp.ok) {
         const data = await resp.json();
         setContacts(data.contacts || []);
@@ -1621,7 +1634,7 @@ export default function App() {
     const timer = setTimeout(async () => {
       try {
         const token = localStorage.getItem('token');
-        const resp = await fetch(`${SERVER_URL}/contacts/search?q=${encodeURIComponent(q)}`, {
+        const resp = await apiFetch(`/contacts/search?q=${encodeURIComponent(q)}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (resp.ok) {
@@ -1636,7 +1649,7 @@ export default function App() {
   const addContact = async (username) => {
     try {
       const token = localStorage.getItem('token');
-      const resp = await fetch(`${SERVER_URL}/contacts`, {
+      const resp = await apiFetch(`/contacts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ username }),
@@ -1652,7 +1665,7 @@ export default function App() {
   const removeContact = async (username) => {
     try {
       const token = localStorage.getItem('token');
-      await fetch(`${SERVER_URL}/contacts/${encodeURIComponent(username)}`, {
+      await apiFetch(`/contacts/${encodeURIComponent(username)}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -1665,7 +1678,7 @@ export default function App() {
     if (call) return;                                    // уже звоним — второй клик игнорируем
     try {
       const token = localStorage.getItem('token');
-      const resp = await fetch(`${SERVER_URL}/rooms/call`, {
+      const resp = await apiFetch(`/rooms/call`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ username }),
@@ -1759,7 +1772,7 @@ export default function App() {
       }
       try {
         const token = localStorage.getItem('token');
-        const resp = await fetch(`${SERVER_URL}/rooms/info/${encodeURIComponent(slug)}`, {
+        const resp = await apiFetch(`/rooms/info/${encodeURIComponent(slug)}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (resp.ok) {
@@ -1782,7 +1795,7 @@ export default function App() {
     if (!knockRequest) return;
     try {
       const token = localStorage.getItem('token');
-      await fetch(`${SERVER_URL}/rooms/invite`, {
+      await apiFetch(`/rooms/invite`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ slug: knockRequest.roomId, username: knockRequest.username }),
@@ -2045,7 +2058,7 @@ export default function App() {
       try {
         // гость идёт по отдельному маршруту: без аккаунта, строго по ключу из ссылки
         resp = guestMode
-          ? await fetch(`${SERVER_URL}/rooms/guest-token`, {
+          ? await apiFetch(`/rooms/guest-token`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2056,7 +2069,7 @@ export default function App() {
             }),
             signal: tokenController.signal,
           })
-          : await fetch(`${SERVER_URL}/rooms/token`, {
+          : await apiFetch(`/rooms/token`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -2840,8 +2853,8 @@ export default function App() {
       setGuestError('');
       setGuestBusy(true);
       try {
-        const r = await fetch(
-          `${SERVER_URL}/rooms/guest-info/${encodeURIComponent(guestInvite.room)}?key=${encodeURIComponent(guestInvite.key)}`,
+        const r = await apiFetch(
+          `/rooms/guest-info/${encodeURIComponent(guestInvite.room)}?key=${encodeURIComponent(guestInvite.key)}`,
         );
         const info = await r.json();
         if (!info.exists) { setGuestError('Комната не найдена — возможно, ссылка устарела'); return; }
