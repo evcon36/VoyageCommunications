@@ -1,7 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
-const { EgressClient, EncodedFileType } = require('livekit-server-sdk');
+const { EgressClient, EncodedFileType, RoomServiceClient } = require('livekit-server-sdk');
 const authMiddleware = require('../middleware/auth.middleware');
 const prisma = require('../lib/prisma');
 const recTimeline = require('../lib/recTimeline');
@@ -9,6 +9,13 @@ const recTimeline = require('../lib/recTimeline');
 const router = express.Router();
 
 const egress = new EgressClient(
+  'http://127.0.0.1:7880',
+  process.env.LIVEKIT_API_KEY,
+  process.env.LIVEKIT_API_SECRET,
+);
+
+// нужен, чтобы перед стартом записи узнать состав комнаты
+const roomSvc = new RoomServiceClient(
   'http://127.0.0.1:7880',
   process.env.LIVEKIT_API_KEY,
   process.env.LIVEKIT_API_SECRET,
@@ -63,6 +70,26 @@ router.post('/start', authMiddleware, async (req, res) => {
         const allowed = company.recordPolicy === 'owner' ? role === 'owner' : (role === 'owner' || role === 'admin');
         if (!allowed) return res.status(403).json({ message: 'Запись разрешена только ' + (company.recordPolicy === 'owner' ? 'владельцу компании' : 'админам') });
       }
+    }
+
+    // Записывать можно только разговор между людьми с аккаунтами. Голос и лицо
+    // это биометрия: человек без аккаунта ничего не подписывал и о записи
+    // договориться с ним негде. Плашка «идёт запись» такой договорённостью не
+    // является, поэтому при госте в комнате запись недоступна никому.
+    try {
+      const parts = await roomSvc.listParticipants(roomId);
+      const guest = (parts || []).find(p => String(p.identity || '').startsWith('guest#'));
+      if (guest) {
+        return res.status(403).json({
+          message: 'В комнате есть участник без аккаунта. Запись доступна, когда все вошли в свои аккаунты',
+          reason: 'guest-present',
+          guestName: guest.name || null,
+        });
+      }
+    } catch (e) {
+      // состав комнаты неизвестен — значит поручиться, что гостей нет, нельзя
+      console.error('REC GUEST CHECK ERROR:', e.message);
+      return res.status(503).json({ message: 'Не удалось проверить состав комнаты. Попробуйте ещё раз' });
     }
 
     const fileName = `rec-${roomId}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.mp4`;

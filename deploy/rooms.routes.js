@@ -33,6 +33,97 @@ function iceServers(tag) {
   return list;
 }
 
+// ── Гостевые комнаты ──
+// Комната, созданная без аккаунта, живёт 40 минут и вмещает 5 человек.
+// Признак ставится при создании и не снимается: если бы лимит зависел от
+// того, кто сейчас в комнате, обойти его можно было бы, позвав знакомого с
+// аккаунтом. Срок хранится в базе, а не в таймере процесса: таймер не
+// переживает перезапуск, и комнаты становились бы вечными после деплоя.
+const GUEST_ROOM_MINUTES = 40;
+const GUEST_ROOM_PEERS = 5;
+
+// Грубая защита от того, чтобы наш сервер использовали как бесплатный SFU.
+// Обходится сменой адреса, но отсекает простые скрипты.
+const guestCreateLog = new Map();
+const GUEST_CREATE_WINDOW_MS = 60 * 60 * 1000;
+const GUEST_CREATE_LIMIT = 10;
+
+function guestCreateAllowed(ip) {
+  const now = Date.now();
+  const fresh = (guestCreateLog.get(ip) || []).filter(t => now - t < GUEST_CREATE_WINDOW_MS);
+  if (fresh.length >= GUEST_CREATE_LIMIT) { guestCreateLog.set(ip, fresh); return false; }
+  fresh.push(now);
+  guestCreateLog.set(ip, fresh);
+  return true;
+}
+// чтобы карта не росла бесконечно на живом сервере
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, times] of guestCreateLog) {
+    const fresh = times.filter(t => now - t < GUEST_CREATE_WINDOW_MS);
+    if (fresh.length) guestCreateLog.set(ip, fresh); else guestCreateLog.delete(ip);
+  }
+}, GUEST_CREATE_WINDOW_MS).unref();
+
+// Общая проверка на входе в комнату: истёк срок или нет места.
+// Возвращает текст отказа либо null, если пускать можно.
+async function guestLimitBlock(room, { rejoiningIdentity } = {}) {
+  if (!room.isGuestRoom) return null;
+  if (room.expiresAt && new Date(room.expiresAt) <= new Date()) {
+    return { status: 410, body: { message: 'Время бесплатной комнаты вышло', reason: 'expired' } };
+  }
+  if (room.maxPeers) {
+    const parts = await roomSvc.listParticipants(room.slug).catch(() => []);
+    const list = Array.isArray(parts) ? parts : [];
+    // Возврат после обрыва не должен упираться в лимит: человек уже был здесь,
+    // просто его прежнее соединение ещё не убрали.
+    const already = rejoiningIdentity && list.some(p => p.identity === rejoiningIdentity);
+    if (!already && list.length >= room.maxPeers) {
+      return { status: 409, body: { message: `В бесплатной комнате не больше ${room.maxPeers} человек`, reason: 'full' } };
+    }
+  }
+  return null;
+}
+
+// Создать комнату без аккаунта
+router.post('/guest-create', async (req, res) => {
+  try {
+    const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+    if (!guestCreateAllowed(ip)) {
+      return res.status(429).json({ message: 'Слишком много комнат подряд. Попробуйте позже' });
+    }
+    const { name, guestId } = req.body || {};
+    const owner = String(guestId || '').slice(0, 64) || `guest#${crypto.randomBytes(4).toString('hex')}`;
+    const room = await prisma.room.create({
+      data: {
+        slug: makeSlug(),
+        name: String(name || 'Быстрый звонок').slice(0, 60),
+        ownerId: owner,
+        ownerName: String(name || 'Гость').slice(0, 32),
+        isPrivate: true,
+        inviteKey: makeKey(),
+        isGuestRoom: true,
+        expiresAt: new Date(Date.now() + GUEST_ROOM_MINUTES * 60 * 1000),
+        maxPeers: GUEST_ROOM_PEERS,
+      },
+    });
+    return res.status(201).json({
+      room: {
+        slug: room.slug,
+        name: room.name,
+        inviteKey: room.inviteKey,
+        expiresAt: room.expiresAt,
+        maxPeers: room.maxPeers,
+        isGuestRoom: true,
+      },
+      limits: { minutes: GUEST_ROOM_MINUTES, peers: GUEST_ROOM_PEERS },
+    });
+  } catch (e) {
+    console.error('GUEST ROOM CREATE ERROR:', e);
+    return res.status(500).json({ message: 'Не удалось создать комнату' });
+  }
+});
+
 // ── Создать комнату ──
 router.post('/create', authMiddleware, async (req, res) => {
   try {
@@ -158,6 +249,14 @@ router.post('/token', authMiddleware, async (req, res) => {
       }
     }
 
+    // Лимиты гостевой комнаты действуют и на владельцев аккаунтов: комната
+    // осталась гостевой, кто бы в неё ни вошёл. Иначе ограничение снималось бы
+    // приглашением любого знакомого с аккаунтом.
+    if (room) {
+      const blocked = await guestLimitBlock(room, { rejoiningIdentity: req.user.id });
+      if (blocked) return res.status(blocked.status).json(blocked.body);
+    }
+
     // Комната ожидания: гостей (не владелец) пускаем только после допуска ведущим
     if (room && room.waitingRoom && room.ownerId !== req.user.id) {
       const admitted = global.admittedWaiters?.get(roomId);
@@ -240,6 +339,9 @@ router.post('/guest-token', async (req, res) => {
     if (!room.inviteKey || key !== room.inviteKey) {
       return res.status(403).json({ message: 'Нужна полная ссылка-приглашение' });
     }
+
+    const blocked = await guestLimitBlock(room, { rejoiningIdentity: guestId ? `guest#${guestId}` : null });
+    if (blocked) return res.status(blocked.status).json(blocked.body);
 
     // Комната ожидания — уважаем настройку комнаты: гость всегда «не владелец»
     if (room.waitingRoom) {
