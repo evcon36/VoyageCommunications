@@ -31,6 +31,27 @@ function waitFor(sock, event, ms = 4000) {
   });
 }
 
+// Между сценариями подчищаем хвосты. Прежде опоздавшее событие от
+// предыдущего сценария попадало в ожидание следующего, и причины
+// съезжали на шаг: тест падал там, где сервер вёл себя правильно.
+function settle(socks, ms = 400) {
+  for (const s of socks) {
+    s.removeAllListeners('call-incoming');
+    s.removeAllListeners('call-ended');
+    s.removeAllListeners('call-ringing');
+    s.removeAllListeners('call-accepted');
+  }
+  return new Promise((r) => setTimeout(() => {
+    for (const s of socks) {
+      s.removeAllListeners('call-incoming');
+      s.removeAllListeners('call-ended');
+      s.removeAllListeners('call-ringing');
+      s.removeAllListeners('call-accepted');
+    }
+    r();
+  }, ms));
+}
+
 const results = [];
 const check = (name, ok, detail = '') => {
   results.push({ name, ok, detail });
@@ -40,6 +61,8 @@ const check = (name, ok, detail = '') => {
 (async () => {
   const a = await connect('testcaller');
   const b = await connect('testcallee');
+
+  await settle([a, b]);
 
   // 1. Отклонение: звонящий должен узнать причину
   {
@@ -55,6 +78,8 @@ const check = (name, ok, detail = '') => {
     }
   }
 
+  await settle([a, b]);
+
   // 2. Отмена звонящим: плашка у получателя должна погаснуть
   {
     const inc = waitFor(b, 'call-incoming');
@@ -66,6 +91,8 @@ const check = (name, ok, detail = '') => {
     check('отмена гасит плашку у получателя', e?.reason === 'cancelled', `reason=${e?.reason}`);
   }
 
+  await settle([a, b]);
+
   // 3. Звонок несуществующему: не должно быть тишины
   {
     const ended = waitFor(a, 'call-ended');
@@ -74,6 +101,8 @@ const check = (name, ok, detail = '') => {
     check('недоступный абонент — звонящий уведомлён', e?.reason === 'unavailable', `reason=${e?.reason}`);
   }
 
+  await settle([a, b]);
+
   // 4. Звонок самому себе
   {
     const ended = waitFor(a, 'call-ended');
@@ -81,6 +110,8 @@ const check = (name, ok, detail = '') => {
     const e = await ended;
     check('звонок самому себе отклоняется', e?.reason === 'self', `reason=${e?.reason}`);
   }
+
+  await settle([a, b]);
 
   // 5. Двойной клик не плодит звонки
   {
@@ -94,6 +125,8 @@ const check = (name, ok, detail = '') => {
     a.emit('call-cancel', { callId: first.callId });
     await waitFor(b, 'call-ended', 2000);
   }
+
+  await settle([a, b]);
 
   // 6. Занято: пока идёт звонок, третий получает busy
   {
@@ -110,6 +143,8 @@ const check = (name, ok, detail = '') => {
     c.close();
   }
 
+  await settle([a, b]);
+
   // 7. Приём: звонящий получает данные комнаты
   {
     const inc = waitFor(b, 'call-incoming');
@@ -124,6 +159,8 @@ const check = (name, ok, detail = '') => {
     b.emit('call-accept', { callId: call.callId });
     check('повторный приём игнорируется', (await again) === null);
   }
+
+  await settle([a, b]);
 
   // 8. Обрыв соединения звонящего гасит звонок
   {
