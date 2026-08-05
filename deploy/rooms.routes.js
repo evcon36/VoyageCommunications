@@ -305,6 +305,10 @@ router.get('/guest-info/:slug', async (req, res) => {
       ownerName: room.ownerName,
       waitingRoom: room.waitingRoom,
       muteOnJoin: room.muteOnJoin,
+      // Про лимит человек должен узнать до входа, а не на сороковой минуте
+      isGuestRoom: room.isGuestRoom,
+      expiresAt: room.expiresAt,
+      maxPeers: room.maxPeers,
     });
   } catch (e) {
     console.error('GUEST INFO ERROR:', e.message);

@@ -1500,7 +1500,38 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [roomId, authUser]);
 
+  // Комната без аккаунта: живёт 40 минут и вмещает 5 человек. Лимиты ставит
+  // сервер и не снимает их потом, поэтому здесь только показываем их человеку.
+  const [guestLimits, setGuestLimits] = useState(null);
+
+  const createGuestRoom = async () => {
+    try {
+      const resp = await fetch(`${SERVER_URL}/rooms/guest-create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: userName.trim() ? `Звонок: ${userName.trim()}` : 'Быстрый звонок',
+          guestId: guestIdRef.current,
+        }),
+      });
+      if (resp.status === 429) { setStatus('Слишком много комнат подряд. Попробуйте позже'); return null; }
+      if (!resp.ok) { setStatus('Не удалось создать комнату'); return null; }
+      const { room, limits } = await resp.json();
+      inviteKeyRef.current = room.inviteKey;
+      setRoomId(room.slug);
+      setGuestLimits({ ...limits, expiresAt: room.expiresAt });
+      setRoomInfo({ exists: true, name: room.name, isPrivate: true, isOwner: true, hasAccess: true, members: [], inviteKey: room.inviteKey });
+      setStatus(`Комната готова. Бесплатно: ${limits.minutes} минут, до ${limits.peers} человек`);
+      return room;
+    } catch {
+      setStatus('Не удалось создать комнату');
+      return null;
+    }
+  };
+
   const createPrivateRoom = async (opts = {}) => {
+    // Без аккаунта маршрут другой: приватные комнаты заводит только аккаунт
+    if (!authUser) return createGuestRoom();
     try {
       const token = localStorage.getItem('token');
       const resp = await fetch(`${SERVER_URL}/rooms/create`, {
@@ -1545,6 +1576,43 @@ export default function App() {
   // Медиадвижок тянем фоном сразу после первого экрана: к моменту входа в
   // звонок он обычно уже на месте, а первый экран его не ждёт.
   useEffect(() => { prefetchLiveKit(); }, []);
+
+  // Сколько осталось бесплатной комнате. Считаем от срока, присланного
+  // сервером, а не от своего таймера: вкладка могла спать, часы разойтись.
+  const [guestLeftMs, setGuestLeftMs] = useState(null);
+  const [guestEnded, setGuestEnded] = useState(false);
+  useEffect(() => {
+    if (!guestLimits?.expiresAt || !joined) { setGuestLeftMs(null); return; }
+    const end = new Date(guestLimits.expiresAt).getTime();
+    const tick = () => {
+      const left = end - Date.now();
+      setGuestLeftMs(left);
+      if (left <= 0) {
+        // Не выкидываем в пустоту: показываем понятный экран, откуда можно
+        // начать заново одной кнопкой
+        setGuestEnded(true);
+        leaveCall();
+      }
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guestLimits, joined]);
+
+  // Предупреждаем заранее, по разу на каждый рубеж
+  const warnedRef = useRef({ five: false, one: false });
+  useEffect(() => {
+    if (guestLeftMs == null) { warnedRef.current = { five: false, one: false }; return; }
+    const min = guestLeftMs / 60000;
+    if (min <= 1 && !warnedRef.current.one) {
+      warnedRef.current.one = true;
+      setCallNotice('Бесплатное время заканчивается через минуту');
+    } else if (min <= 5 && !warnedRef.current.five) {
+      warnedRef.current.five = true;
+      setCallNotice('Осталось 5 минут бесплатного времени');
+    }
+  }, [guestLeftMs]);
 
   // Глобальный поиск людей (с задержкой при вводе)
   useEffect(() => {
@@ -2778,6 +2846,11 @@ export default function App() {
         const info = await r.json();
         if (!info.exists) { setGuestError('Комната не найдена — возможно, ссылка устарела'); return; }
         if (!info.guestAllowed) { setGuestError('Ссылка неполная или недействительна — попросите прислать её заново'); return; }
+        // Про лимит человек должен знать до входа, а не узнавать на сороковой
+        // минуте: он не создавал никакой «бесплатной комнаты», он нажал ссылку
+        if (info.isGuestRoom && info.expiresAt) {
+          setGuestLimits({ minutes: 40, peers: info.maxPeers || 5, expiresAt: info.expiresAt });
+        }
         setUserName(name);            // сервер подставит «Гость N», если пусто
         setRoomId(guestInvite.room);
         inviteKeyRef.current = guestInvite.key;
@@ -2856,6 +2929,45 @@ export default function App() {
         onBack={() => setShowAuth(false)}
         authError={authError}
       />
+    );
+  }
+
+  // Время бесплатной комнаты вышло. Человек мог просто нажать чужую ссылку и
+  // никакой комнаты не создавать, поэтому объясняем, что произошло, и даём
+  // продолжить одной кнопкой вместо того, чтобы молча выкинуть.
+  if (guestEnded) {
+    return (
+      <div className="app-shell timeup-shell">
+        <div className="timeup-card">
+          <h1 className="timeup-title">Время вышло</h1>
+          <p className="timeup-text">
+            Бесплатная комната рассчитана на {guestLimits?.minutes || 40} минут.
+            Можно продолжить разговор в новой комнате прямо сейчас.
+          </p>
+          <div className="timeup-actions">
+            <button
+              className="primary-btn"
+              onClick={async () => {
+                setGuestEnded(false);
+                setGuestLimits(null);
+                const room = await createGuestRoom();
+                if (room) setStatus('Новая комната готова. Отправьте ссылку собеседникам');
+              }}
+            >
+              Продолжить в новой комнате
+            </button>
+            <button className="ghost-btn" onClick={() => { setGuestEnded(false); setGuestLimits(null); }}>
+              На главную
+            </button>
+          </div>
+          {!authUser && (
+            <p className="timeup-hint">
+              В аккаунте комнаты без ограничения по времени, плюс контакты и запись разговоров.
+              <button className="linklike" onClick={() => { setGuestEnded(false); setShowAuth(true); }}>Войти</button>
+            </p>
+          )}
+        </div>
+      </div>
     );
   }
 
@@ -4156,11 +4268,22 @@ export default function App() {
               {/* создание комнат и контакты — только для владельцев аккаунта */}
               {!guestMode && (
                 <>
-                  <button className="ghost-btn" onClick={createPrivateRoom}><Icon name="lock" size={16} /> Создать приватную комнату</button>
-                  <button className="ghost-btn" onClick={copyRoomLink}>{copied ? 'Ссылка скопирована' : 'Скопировать ссылку'}</button>
-                  <button className={`ghost-btn${isContactsOpen ? ' active' : ''}`} onClick={() => setIsContactsOpen(p => !p)}>
-                    <Icon name="users" size={16} /> Контакты{contacts.length > 0 ? ` (${contacts.length})` : ''}
+                  <button className="ghost-btn" onClick={createPrivateRoom}>
+                    <Icon name="lock" size={16} /> {authUser ? 'Создать приватную комнату' : 'Создать комнату'}
                   </button>
+                  <button className="ghost-btn" onClick={copyRoomLink}>{copied ? 'Ссылка скопирована' : 'Скопировать ссылку'}</button>
+                  {/* Кнопки, которые без аккаунта всё равно откажут, не
+                      показываем: человек решит, что сломалось, и будет жать
+                      снова. Вместо них честное приглашение войти. */}
+                  {authUser ? (
+                    <button className={`ghost-btn${isContactsOpen ? ' active' : ''}`} onClick={() => setIsContactsOpen(p => !p)}>
+                      <Icon name="users" size={16} /> Контакты{contacts.length > 0 ? ` (${contacts.length})` : ''}
+                    </button>
+                  ) : (
+                    <button className="ghost-btn" onClick={() => setShowAuth(true)}>
+                      <Icon name="users" size={16} /> Контакты и запись: войти
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -4201,6 +4324,13 @@ export default function App() {
             <div className="call-topbar-left">
               <div className="brand" style={{ fontSize: 18 }}>COMS</div>
               <div className="call-room-badge">{roomId}</div>
+              {/* Оставшееся время видно всегда: обрыв на сороковой минуте без
+                  предупреждения человек воспринимает как поломку */}
+              {guestLeftMs != null && guestLeftMs > 0 && (
+                <div className={`guest-left${guestLeftMs <= 5 * 60000 ? ' guest-left--soon' : ''}`}>
+                  осталось {Math.floor(guestLeftMs / 60000)}:{String(Math.floor((guestLeftMs % 60000) / 1000)).padStart(2, '0')}
+                </div>
+              )}
               <button className="call-link-btn" title="Скопировать ссылку на звонок" onClick={() => { copyRoomLink(); setStatus('Ссылка скопирована'); }}>
                 <Icon name="link" size={14} />
               </button>
