@@ -1524,6 +1524,16 @@ export default function App() {
   // сервер и не снимает их потом, поэтому здесь только показываем их человеку.
   const [guestLimits, setGuestLimits] = useState(null);
 
+  // Ошибка и успех выглядели одинаково: зелёная точка стояла всегда, что бы
+  // ни случилось. Вид выводим из текста, чтобы не править полсотни мест, где
+  // статус ставится, и чтобы новые сообщения тоже попадали в нужный вид.
+  const statusKind = (text) => {
+    const t = String(text || '').toLowerCase();
+    if (/ошибка|не удалось|истекла|недоступ|вышло|прерв|отказ|нет доступа/.test(t)) return 'error';
+    if (/ожида|осталось|заканчивается|слишком много|проверьте/.test(t)) return 'warn';
+    return 'ok';
+  };
+
   const createGuestRoom = async () => {
     try {
       const resp = await apiFetch(`/rooms/guest-create`, {
@@ -2960,7 +2970,7 @@ export default function App() {
                 {guestBusy ? 'Подключаемся…' : 'Войти в звонок'}
               </button>
               <button className="ghost-btn" type="button" disabled={guestBusy} onClick={() => enterAsGuest('')}>
-                Пропустить — войти как гость
+                Войти без имени
               </button>
             </div>
           </form>
@@ -3139,11 +3149,12 @@ export default function App() {
                 ? 'Соединяем…'
                 : <>Вызов… <span className="dialing-left">{callLeft} с</span></>}
             </div>
-            {call.phase === 'ringing' && (
-              <button className="ctrl-round ctrl-round--danger dialing-cancel" onClick={cancelCall} aria-label="Отменить звонок">
-                <Icon name="phoneOff" size={22} />
-              </button>
-            )}
+            {/* Выход должен быть на любой фазе. Раньше в «Соединяем» кнопки не
+                было вовсе, и человек оказывался заперт в карточке без выхода:
+                оставалось только закрыть приложение. */}
+            <button className="ctrl-round ctrl-round--danger dialing-cancel" onClick={cancelCall} aria-label="Отменить звонок">
+              <Icon name="phoneOff" size={22} />
+            </button>
           </div>
         </div>
       )}
@@ -3169,7 +3180,14 @@ export default function App() {
           <div className="waiting-card">
             <div className="waiting-spinner"><span className="spinner" /></div>
             <div className="waiting-title">Вы в комнате ожидания</div>
-            <div className="waiting-text">Ведущий скоро впустит вас в звонок. Пожалуйста, подождите.</div>
+            {/* Про двухминутный предел человек узнавал только когда его
+                выбрасывало. Предупреждаем заранее: ожидание с известным
+                концом переносится совсем иначе, чем бесконечное. */}
+            <div className="waiting-text">
+              Ведущий скоро впустит вас в звонок.
+              <br />
+              Если он не ответит за две минуты, вернём вас на главный экран.
+            </div>
             <button className="ghost-btn" onClick={cancelWaiting}>Отменить</button>
           </div>
         </div>
@@ -4263,7 +4281,7 @@ export default function App() {
               )}
             </div>
             <div className="topbar-right">
-              <div className="status-badge">{status}</div>
+              <div className={`status-badge status-badge--${statusKind(status)}`}>{status}</div>
               <button className="ghost-btn theme-toggle-btn" onClick={toggleTheme} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'} aria-label="Сменить тему">{theme === 'dark' ? '☀' : '☾'}</button>
               {/* у гостя нет аккаунта — показываем только выход из звонка */}
               {guestMode ? (
@@ -4343,7 +4361,7 @@ export default function App() {
                     </button>
                   ) : (
                     <button className="ghost-btn" onClick={() => setShowAuth(true)}>
-                      <Icon name="users" size={16} /> Контакты и запись: войти
+                      <Icon name="users" size={16} /> Войти, чтобы открыть контакты
                     </button>
                   )}
                 </>
@@ -4409,7 +4427,7 @@ export default function App() {
               )}
             </div>
             <div className="call-topbar-right">
-              {status !== 'Подключено' && <div className="status-badge">{status}</div>}
+              {status !== 'Подключено' && <div className={`status-badge status-badge--${statusKind(status)}`}>{status}</div>}
               <button className="ghost-btn" style={{ height: 36, padding: '0 12px' }} title="Участники" onClick={() => setIsParticipantsOpen(p => !p)}><Icon name="users" size={16} /> {allParticipants.length}</button>
               <button className="ghost-btn" style={{ height: 36, padding: '0 12px' }} onClick={() => { setAccountTab('profile'); setIsAccountPanelOpen(p => !p); }}><Icon name="menu" size={16} /></button>
             </div>

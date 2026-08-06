@@ -3049,3 +3049,53 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   animation: boot-screen-pulse 1.4s ease-in-out infinite;
 }
 @keyframes boot-screen-pulse { 0%, 100% { opacity: .4 } 50% { opacity: 1 } }
+
+/* ── Состояние, предупреждение, ошибка ──
+   Точка была зелёной всегда: «Подключено» и «Не удалось создать комнату»
+   выглядели одинаково успешно. Четыре вида обратной связи должны читаться
+   с одного взгляда, не вчитываясь в текст. */
+.status-badge--warn::before  { background: #f0d9a0; }
+.status-badge--error::before { background: #f08a8a; }
+.status-badge--warn  { color: #f0d9a0; }
+.status-badge--error { color: #f4b8b8; }
+/* Ошибку и предупреждение нельзя обрезать многоточием: там сказано, что
+   делать дальше. Успеху одной строки достаточно. */
+.status-badge--warn, .status-badge--error {
+  white-space: normal;
+  text-overflow: clip;
+  max-width: min(92vw, 520px);
+  line-height: 1.35;
+}
+
+/* ── Материалы: было размытие под почти непрозрачной заливкой ──
+   Плата за размытие шла, а самого материала видно не было. Заливку
+   ослабляем, размытие усиливаем: поверхность начинает читаться как стекло,
+   под которым живёт содержимое. Цвета те же, меняется только плотность. */
+.chat-overlay   { background: rgba(13,17,30,.72); backdrop-filter: blur(28px) saturate(160%); }
+.sounds-panel   { background: rgba(13,17,30,.76); backdrop-filter: blur(24px) saturate(160%); }
+.waiting-admit  { background: rgba(13,17,30,.80); backdrop-filter: blur(20px) saturate(150%); }
+.reaction-bar   { background: rgba(20,20,20,.78); backdrop-filter: blur(20px) saturate(150%); }
+.call-notice    { background: rgba(20,20,20,.80); backdrop-filter: blur(20px) saturate(150%); }
+.call-popup     { background: rgba(20,20,20,.82); backdrop-filter: blur(24px) saturate(160%); }
+
+/* ── Мягкое затухание вместо жёсткой линии ──
+   Содержимое проезжает под шапкой, и линия в один пиксель этого не
+   объясняет: она просто режет. Затухание показывает, что под шапкой
+   продолжается список. */
+.chat-header, .account-tabs, .settings-tabs, .admin-header {
+  border-bottom: none;
+  backdrop-filter: blur(20px) saturate(150%);
+}
+.chat-body, .account-section, .settings-body, .admin-content {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .chat-header, .account-tabs, .settings-tabs, .admin-header {
+    border-bottom: 1px solid var(--edge, rgba(244,241,234,.13));
+    backdrop-filter: none;
+  }
+  .chat-body, .account-section, .settings-body, .admin-content {
+    -webkit-mask-image: none; mask-image: none;
+  }
+}
