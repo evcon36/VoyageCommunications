@@ -13,6 +13,12 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!-- Полосы системы по умолчанию светлые и режут глаз на тёмном
+             приложении. Значки на них делаем светлыми, иначе пропадут. -->
+        <item name="android:navigationBarColor">@color/comsBackground</item>
+        <item name="android:statusBarColor">@color/comsBackground</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 
 

@@ -36,5 +36,14 @@ export function buildInviteLink(roomSlug, inviteKey) {
   const base = import.meta.env.VITE_BASE_PATH || '/';
   const params = new URLSearchParams({ room: String(roomSlug || '') });
   if (inviteKey) params.set('key', inviteKey);
-  return `${window.location.origin}${base}j.html?${params.toString()}`;
+
+  // В приложении на телефоне адрес страницы выглядит как capacitor://localhost
+  // или https://localhost: файлы лежат внутри приложения. Такую ссылку человек
+  // отправлял собеседнику, и она не открывалась ни у кого. Ссылка всегда должна
+  // вести на настоящий сайт.
+  const origin = window.location.origin;
+  const isRealSite = /^https?:\/\//.test(origin) && !/^https?:\/\/localhost(:|$)/.test(origin);
+  const site = isRealSite ? `${origin}${base}` : COMS;
+
+  return `${site}j.html?${params.toString()}`;
 }

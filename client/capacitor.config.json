@@ -14,5 +14,9 @@
     "CapacitorHttp": {
       "enabled": false
     }
+  },
+  "android": {
+    "androidScheme": "https",
+    "backgroundColor": "#0b0b0b"
   }
 }
