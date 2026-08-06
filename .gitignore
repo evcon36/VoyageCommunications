@@ -41,3 +41,10 @@ IOS-ПРИЛОЖЕНИЕ.md
 # Документы для внутренней переписки
 *.docx
 client/dist-check/
+
+# Android: сам проект нужен в репозитории, продукты сборки нет
+client/android/.gradle/
+client/android/build/
+client/android/app/build/
+client/android/local.properties
+client/android/capacitor-cordova-android-plugins/

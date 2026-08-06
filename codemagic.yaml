@@ -139,3 +139,63 @@ workflows:
         notify:
           success: true
           failure: true
+
+  # ── Android ──
+  # Отладочный APK: ставится на любой телефон и не требует хранилища ключей.
+  # Для публичной раздачи понадобится подпись ключом релиза, но заводить её до
+  # того, как приложение доказало работоспособность на Android, смысла нет:
+  # потерянное хранилище ключей означает, что обновить приложение у людей уже
+  # не выйдет никогда.
+  android-apk:
+    name: COMS Android → APK
+    max_build_duration: 45
+    instance_type: linux_x2
+
+    environment:
+      vars:
+        VITE_SERVER_URL: "https://voyage-coms.ru"
+        VITE_BASE_PATH: "/"
+      node: 22
+      java: 21
+
+    scripts:
+      - name: Установка зависимостей веб-клиента
+        script: npm ci
+        working_directory: client
+
+      - name: Сборка веб-бандла
+        script: npx vite build --outDir dist-coms
+        working_directory: client
+
+      - name: Убрать из бандла чужую интеллектуальную собственность
+        script: rm -f dist-coms/trump-*.mp3
+        working_directory: client
+
+      - name: Синхронизация с нативным проектом
+        script: npx cap sync android
+        working_directory: client
+
+      - name: Номер сборки
+        script: |
+          # Номер растёт от номера сборки в Codemagic: так два APK никогда не
+          # окажутся с одинаковым номером, и телефон разрешит обновление
+          sed -i "s/versionCode 1/versionCode $((BUILD_NUMBER + 1))/" app/build.gradle
+          grep -n "versionCode" app/build.gradle
+        working_directory: client/android
+
+      - name: Сборка APK
+        script: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
+        working_directory: client/android
+
+    artifacts:
+      - client/android/app/build/outputs/**/*.apk
+
+    publishing:
+      email:
+        recipients:
+          - io449452@gmail.com
+        notify:
+          success: true
+          failure: true

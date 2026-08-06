@@ -12,6 +12,7 @@
     "sync:ios": "cap sync ios"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.0",
     "@capacitor/core": "^8.5.0",
     "@capacitor/ios": "^8.5.0",
     "@livekit/track-processors": "^0.7.2",
