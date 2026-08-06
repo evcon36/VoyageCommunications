@@ -2846,3 +2846,47 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 .timeup-actions { display: flex; flex-direction: column; gap: 10px; }
 .timeup-hint { margin: 22px 0 0; font-size: 13px; line-height: 1.5; color: var(--text-dim, rgba(255,255,255,.55)); }
 .timeup-hint .linklike { margin-left: 6px; }
+
+/* Двухрядная панель кнопок на любом телефоне, а не только на узком экране.
+   Раньше условие было только по ширине: часть Android-устройств сообщает
+   больше 640 точек, и панель разъезжалась в одну строку, как на компьютере.
+   Признак «палец, а не мышь» надёжнее ширины. Правило идёт после базового:
+   при одинаковой силе побеждает то, что ниже в файле. */
+@media (pointer: coarse) {
+  .controls-bar {
+    left: 10px; right: 10px; bottom: 12px;
+    transform: none; max-width: none;
+    border-radius: 26px;
+    flex-direction: column;
+    gap: 0;
+    padding: 14px 12px;
+  }
+  .controls-hidden .controls-bar { transform: translateY(160%); }
+
+  .controls-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 48px);
+    justify-content: center;
+    gap: 14px;
+    width: 100%;
+  }
+  /* сброс звонка всегда в правом нижнем углу: привычное место и не путается
+     с переключателями рядом */
+  .controls-grid .ctrl-round--danger {
+    grid-column: 4;
+    grid-row: 2;
+  }
+}
+
+/* В горизонтали на телефоне высоты мало, там панель снова в один ряд */
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 500px) {
+  .controls-bar {
+    flex-direction: row;
+    left: 50%; right: auto;
+    transform: translateX(-50%);
+    border-radius: 999px;
+    padding: 8px 12px;
+  }
+  .controls-grid { display: flex; }
+  .controls-grid .ctrl-round--danger { grid-column: auto; grid-row: auto; }
+}

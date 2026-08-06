@@ -2874,8 +2874,9 @@ export default function App() {
           `/rooms/guest-info/${encodeURIComponent(guestInvite.room)}?key=${encodeURIComponent(guestInvite.key)}`,
         );
         const info = await r.json();
-        if (!info.exists) { setGuestError('Комната не найдена — возможно, ссылка устарела'); return; }
-        if (!info.guestAllowed) { setGuestError('Ссылка неполная или недействительна — попросите прислать её заново'); return; }
+        // Комнаты может ещё не быть: она заведётся при входе первого человека.
+        // Отказ только когда комната есть и она приватная.
+        if (!info.guestAllowed) { setGuestError('Приватная комната: нужна полная ссылка. Попросите прислать её целиком'); return; }
         // Про лимит человек должен знать до входа, а не узнавать на сороковой
         // минуте: он не создавал никакой «бесплатной комнаты», он нажал ссылку
         if (info.isGuestRoom && info.expiresAt) {

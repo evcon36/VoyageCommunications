@@ -296,11 +296,14 @@ router.post('/token', authMiddleware, async (req, res) => {
 router.get('/guest-info/:slug', async (req, res) => {
   try {
     const room = await prisma.room.findUnique({ where: { slug: req.params.slug } });
-    if (!room) return res.json({ exists: false });
+    // Названия ещё нет — это не отказ, а будущая открытая комната: войдёт
+    // первый, кто наберёт название, и она заведётся на месте
+    if (!room) return res.json({ exists: false, guestAllowed: true, willCreate: true });
     const keyValid = Boolean(req.query.key && room.inviteKey && req.query.key === room.inviteKey);
     return res.json({
       exists: true,
-      guestAllowed: keyValid,          // без ключа гостю входа нет
+      // Ключ нужен только приватной комнате, в открытую входят по названию
+      guestAllowed: !room.isPrivate || keyValid,
       name: room.name,
       ownerName: room.ownerName,
       waitingRoom: room.waitingRoom,
@@ -336,12 +339,44 @@ router.post('/guest-token', async (req, res) => {
     const { roomId, key, name, guestId } = req.body || {};
     if (!roomId) return res.status(400).json({ message: 'roomId обязателен' });
 
-    const room = await prisma.room.findUnique({ where: { slug: roomId } });
-    if (!room) return res.status(404).json({ message: 'Комната не найдена' });
+    // Три вида комнат, и вход в каждый устроен по-своему:
+    //   открытая   — входит любой, кто знает название, ключ не нужен;
+    //   приватная  — только по полной ссылке или для тех, кого уже впустили;
+    //   звонок контакту — та же приватная, просто собеседник уже в списке.
+    let room = await prisma.room.findUnique({ where: { slug: roomId } });
 
-    // главное условие: гостя пускает только действительная ссылка-приглашение
-    if (!room.inviteKey || key !== room.inviteKey) {
-      return res.status(403).json({ message: 'Нужна полная ссылка-приглашение' });
+    // Названия, которого ещё нет, раньше означало отказ: человек вводил
+    // название, которое ему продиктовали, и упирался в «комната не найдена».
+    // Теперь такая комната заводится на месте как открытая. Лимиты ей ставим
+    // гостевые, иначе через произвольное название их можно было бы обойти.
+    if (!room) {
+      const clean = String(roomId).trim().slice(0, 60);
+      if (!/^[a-zA-Z0-9._-]{3,60}$/.test(clean)) {
+        return res.status(400).json({ message: 'Название комнаты: латиница, цифры, дефис' });
+      }
+      const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+      if (!guestCreateAllowed(ip)) {
+        return res.status(429).json({ message: 'Слишком много комнат подряд. Попробуйте позже' });
+      }
+      room = await prisma.room.create({
+        data: {
+          slug: clean,
+          name: clean,
+          ownerId: String(guestId || '').slice(0, 64) || `guest#${crypto.randomBytes(4).toString('hex')}`,
+          ownerName: String(name || 'Гость').slice(0, 32),
+          isPrivate: false,
+          inviteKey: makeKey(),
+          isGuestRoom: true,
+          expiresAt: new Date(Date.now() + GUEST_ROOM_MINUTES * 60 * 1000),
+          maxPeers: GUEST_ROOM_PEERS,
+        },
+      });
+    }
+
+    // Ключ спрашиваем только у приватной комнаты. В открытую пускаем всех:
+    // в этом и смысл открытой.
+    if (room.isPrivate && (!room.inviteKey || key !== room.inviteKey)) {
+      return res.status(403).json({ message: 'Приватная комната: нужна полная ссылка-приглашение' });
     }
 
     const blocked = await guestLimitBlock(room, { rejoiningIdentity: guestId ? `guest#${guestId}` : null });
