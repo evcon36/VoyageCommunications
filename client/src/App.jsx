@@ -179,9 +179,9 @@ const CALL_END_TEXT = {
   declined: 'Звонок отклонён',
   cancelled: 'Звонок отменён',
   timeout: 'Не ответили',
-  busy: 'Абонент занят',
+  busy: 'Сейчас занят',
   'busy-self': 'Вы уже в разговоре. Сначала завершите текущий звонок',
-  unavailable: 'Абонент не в сети',
+  unavailable: 'Сейчас не в сети',
   taken: 'Вы ответили на другом устройстве',
   self: 'Нельзя позвонить самому себе',
 };
@@ -595,7 +595,7 @@ export default function App() {
   const joinedRef = useRef(false);              // для обработчиков сокета
   const joinPayloadRef = useRef(null);          // чем повторно войти после реконнекта
   joinedRef.current = joined;
-  const [status, setStatus] = useState('Готов к подключению');
+  const [status, setStatus] = useState('Готово к звонку');
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
   const [isSharingScreen, setIsSharingScreen] = useState(false);
@@ -933,7 +933,7 @@ export default function App() {
         setTimeout(() => setProfileMsg(''), 3500);
       }
     } catch {
-      setProfileMsg('Ошибка сети');
+      setProfileMsg('Нет связи с сервером. Проверьте интернет и повторите');
       setTimeout(() => setProfileMsg(''), 3000);
     }
   };
@@ -965,7 +965,7 @@ export default function App() {
         setTimeout(() => setProfileMsg(''), 3500);
       }
     } catch {
-      setProfileMsg('Ошибка сети');
+      setProfileMsg('Нет связи с сервером. Проверьте интернет и повторите');
       setTimeout(() => setProfileMsg(''), 3000);
     }
   };
@@ -1010,7 +1010,7 @@ export default function App() {
       // показываем экран восстановления вместо приложения
       setAuthUser(u => (u ? { ...u, deletionRequestedAt: new Date().toISOString(), purgeAt: d.purge_at } : u));
     } catch {
-      setDelError('Ошибка сети');
+      setDelError('Нет связи с сервером. Проверьте интернет и повторите');
     } finally {
       setDelBusy(false);
     }
@@ -1045,7 +1045,7 @@ export default function App() {
       }
       window.location.href = `${mediaOrigin()}${d.url}`;
     } catch {
-      setProfileMsg('Ошибка сети');
+      setProfileMsg('Нет связи с сервером. Проверьте интернет и повторите');
       setTimeout(() => setProfileMsg(''), 3000);
     }
   };
@@ -1065,7 +1065,7 @@ export default function App() {
         setTimeout(() => setProfileMsg(''), 3500);
       }
     } catch {
-      setProfileMsg('Ошибка сети');
+      setProfileMsg('Нет связи с сервером. Проверьте интернет и повторите');
       setTimeout(() => setProfileMsg(''), 3000);
     }
   };
@@ -1135,7 +1135,7 @@ export default function App() {
       const d = await resp.json();
       if (resp.ok) { setNewCompanyName(''); setCompanies(prev => [{ ...d.company, myRole: 'owner' }, ...prev]); setProfileMsg('Компания создана'); }
       else setProfileMsg(d.message || 'Ошибка');
-    } catch { setProfileMsg('Ошибка сети'); }
+    } catch { setProfileMsg('Нет связи с сервером. Проверьте интернет и повторите'); }
     setTimeout(() => setProfileMsg(''), 2500);
   };
 
@@ -1151,7 +1151,7 @@ export default function App() {
       const d = await resp.json();
       if (resp.ok) { setCompanyInvite(p => ({ ...p, [slug]: '' })); fetchCompanies(); setProfileMsg(d.message); }
       else setProfileMsg(d.message || 'Ошибка');
-    } catch { setProfileMsg('Ошибка сети'); }
+    } catch { setProfileMsg('Нет связи с сервером. Проверьте интернет и повторите'); }
     setTimeout(() => setProfileMsg(''), 2500);
   };
 
@@ -1461,7 +1461,7 @@ export default function App() {
         setProfileMsg(data.message || 'Ошибка');
       }
     } catch {
-      setProfileMsg('Ошибка сети');
+      setProfileMsg('Нет связи с сервером. Проверьте интернет и повторите');
     }
     setTimeout(() => setProfileMsg(''), 2500);
   };
@@ -1495,7 +1495,7 @@ export default function App() {
           setProfileMsg(data.message || 'Ошибка загрузки');
         }
       } catch {
-        setProfileMsg('Ошибка сети');
+        setProfileMsg('Нет связи с сервером. Проверьте интернет и повторите');
       }
       setTimeout(() => setProfileMsg(''), 2500);
     };
@@ -2045,7 +2045,7 @@ export default function App() {
 
   const joinRoomWith = async (slug, key, opts = {}) => {
     // пустые поля — объясняем, а не молчим
-    if (!slug) { setStatus('Введите ID комнаты'); return; }
+    if (!slug) { setStatus('Впишите название комнаты'); return; }
     // гость мог нажать «Пропустить» — тогда имя присвоит сервер («Гость N»)
     if (!guestMode && !userName.trim()) { setStatus('Введите ваше имя'); return; }
     if (joined || joiningRef.current) return;
@@ -2055,7 +2055,7 @@ export default function App() {
     directCallRef.current = Boolean(opts.direct);
     if (slug !== roomId) setRoomId(slug);
     joiningRef.current = true;
-    setStatus('Получаем токен...');
+    setStatus('Подключаемся к комнате…');
 
     // Если старая комната ещё существует — сначала отключаемся
     if (livekitRoomRef.current) {
@@ -4331,8 +4331,8 @@ export default function App() {
               <input value={userName} onChange={e => setUserName(e.target.value)} placeholder="Введите имя" />
             </div>
             <div className="field-group">
-              <label>ID комнаты</label>
-              <input value={roomId} onChange={e => setRoomId(e.target.value)} placeholder="Введите ID комнаты" />
+              <label>Название комнаты</label>
+              <input value={roomId} onChange={e => setRoomId(e.target.value)} placeholder="например, planerka" />
               {roomInfo?.exists && (
                 <div className={`room-badge${roomInfo.isPrivate ? ' room-badge--private' : ''}`}>
                   <Icon name={roomInfo.isPrivate ? 'lock' : 'globe'} size={13} /> {roomInfo.isPrivate ? 'Приватная' : 'Открытая'} · {roomInfo.name}
@@ -4417,7 +4417,7 @@ export default function App() {
               <div className="call-timer">{formattedCallTime}</div>
               {connQuality !== 'excellent' && (
                 <div className={`conn-badge conn-badge--${connQuality}`} title="Качество вашего соединения">
-                  {connQuality === 'good' ? 'сеть: средне' : 'сеть: слабо'}
+                  {connQuality === 'good' ? 'сеть: хорошо' : 'сеть: слабо'}
                 </div>
               )}
               {recActive && (
