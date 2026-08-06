@@ -3047,7 +3047,9 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   color: var(--text-dim, rgba(244,241,234,.55));
   animation: boot-screen-pulse 1.4s ease-in-out infinite;
 }
-@keyframes boot-screen-pulse { 0%, 100% { opacity: .4 } 50% { opacity: 1 } }
+/* Пульсация не должна делать надпись нечитаемой: нижняя точка поднята,
+   при 40% контраст падал до 2.2 к 1 и половину цикла текст пропадал. */
+@keyframes boot-screen-pulse { 0%, 100% { opacity: .72 } 50% { opacity: 1 } }
 
 /* ── Состояние, предупреждение, ошибка ──
    Точка была зелёной всегда: «Подключено» и «Не удалось создать комнату»
@@ -3097,4 +3099,19 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   .chat-body, .account-section, .settings-body, .admin-content {
     -webkit-mask-image: none; mask-image: none;
   }
+}
+
+/* ── Читаемость поверх видео ──
+   Подпись с именем шла белым по подложке в 45% прозрачности. Поверх светлого
+   кадра это давало контраст 3.4 к 1 при норме 4.5. Уплотняем подложку: цвет
+   текста и шрифт те же. */
+.tile-name { background: rgba(0,0,0,.62); }
+.screen-share-label { background: rgba(0,0,0,.72); color: #fff; }
+
+/* Контур поля ввода почти совпадал с фоном: поле было неотличимо от страницы,
+   пока в него не ткнёшь. Границе интерактивных элементов нужен свой цвет,
+   тонкие разделители внутри карточек остаются прежними. */
+.field-group input, .field-group textarea, .field-group select,
+.text-input, .contact-search, .chat-input {
+  border: 1px solid var(--edge-interactive, #5a6272);
 }
