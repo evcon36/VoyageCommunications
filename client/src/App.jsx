@@ -2841,7 +2841,17 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageSize.w, stageSize.h, selfSize.w, selfSize.h]);
 
-  if (!authChecked) return <div className="auth-page">Проверяем авторизацию...</div>;
+  // Экран был голым текстом без вёрстки: надпись прилипала к левому верхнему
+  // углу и налезала на строку состояния телефона. Теперь та же заставка, что
+  // и у загрузчика, чтобы переход между ними не был заметен.
+  if (!authChecked) {
+    return (
+      <div className="boot-screen">
+        <div className="boot-screen-mark">COMS</div>
+        <div className="boot-screen-note">Проверяем вход…</div>
+      </div>
+    );
+  }
 
   // сеть недоступна, но сессия сохранена — даём повторить без выхода из аккаунта
   if (authNetError && !authUser) {

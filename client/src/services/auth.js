@@ -1,20 +1,19 @@
-const API_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:4000';
+import { apiFetch as request } from '../net';
 
-// fetch с таймаутом: на нестабильном мобильном интернете запрос может
-// молча зависнуть навсегда — лучше ошибка через 15 секунд и повтор
-async function apiFetch(path, options = {}, timeoutMs = 15000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+// Раньше здесь был свой запросчик с адресом, вшитым при сборке. Из-за этого
+// вход и проверка авторизации ходили мимо общего слоя и знали только один
+// адрес: если он у оператора недоступен, приложение навсегда зависало на
+// «Проверяем авторизацию», и переключение на второй вход не срабатывало,
+// потому что до него дело не доходило.
+async function apiFetch(path, options = {}) {
   let response;
   try {
-    response = await fetch(`${API_URL}${path}`, { ...options, signal: controller.signal });
+    response = await request(path, options);
   } catch (e) {
-    if (e.name === 'AbortError') {
+    if (e?.name === 'AbortError' || e?.name === 'TimeoutError') {
       throw new Error('Сервер не отвечает — проверьте интернет и попробуйте ещё раз');
     }
     throw new Error('Нет соединения с сервером — проверьте интернет');
-  } finally {
-    clearTimeout(timer);
   }
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
