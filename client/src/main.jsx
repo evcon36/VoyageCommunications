@@ -50,7 +50,33 @@ if (window.visualViewport) {
     // offsetTop показывает это смещение, компенсируем его сдвигом сверху.
     root.setProperty('--vv-top', `${vv.offsetTop}px`);
   };
-  setVv();
-  vv.addEventListener('resize', setVv);
-  vv.addEventListener('scroll', setVv);
+  // Клавиатура может быть открыта только когда есть поле в фокусе. Если
+  // фокуса нет, высоту не ужимаем ни при каких обстоятельствах.
+  //
+  // Без этой проверки случалось так: клавиатуру закрыли, а событие об этом на
+  // iOS пришло не всегда. Тогда высота оставалась посчитанной при открытой
+  // клавиатуре, и панель контактов обрезалась ровно посередине экрана, а
+  // снизу проступал главный экран.
+  const editable = () => {
+    const el = document.activeElement;
+    if (!el) return false;
+    const tag = el.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable;
+  };
+  const guarded = () => {
+    if (!editable()) {
+      const root = document.documentElement.style;
+      root.removeProperty('--vvh');
+      root.removeProperty('--vv-top');
+      return;
+    }
+    setVv();
+  };
+
+  guarded();
+  vv.addEventListener('resize', guarded);
+  vv.addEventListener('scroll', guarded);
+  // Снятие фокуса — самый надёжный признак, что клавиатура ушла: приходит
+  // всегда, в отличие от изменения видимой области
+  window.addEventListener('focusout', () => setTimeout(guarded, 50));
 }
