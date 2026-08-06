@@ -58,7 +58,7 @@
 
 body {
   margin: 0;
-  font-family: Inter, Arial, sans-serif;
+  font-family: var(--sans);
   background: var(--bg);
   color: var(--text);
   transition: background .25s ease, color .25s ease;
@@ -78,7 +78,13 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
 .primary-btn, .ghost-btn, .control-btn, .send-btn {
   border: none;
   cursor: pointer;
-  transition: 0.15s ease;
+  /* Список свойств явный. Раньше стояло сокращение, означавшее «всё»: при
+     смене брейкпоинта кнопки плавно меняли высоту и скругление, то есть
+     разъезжались на глазах вместо мгновенной перестройки. */
+  transition: transform .34s cubic-bezier(.32,.72,0,1),
+              background-color .18s ease,
+              color .18s ease,
+              opacity .18s ease;
 }
 .primary-btn:disabled, .ghost-btn:disabled, .control-btn:disabled, .send-btn:disabled {
   opacity: 0.45;
@@ -604,32 +610,9 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
 }
 
 /* на узких экранах — скруглённая нижняя панель, а не «пилюля» (иначе кнопки заворачиваются в блоб) */
-@media (max-width: 640px) {
-  .controls-bar {
-    left: 10px; right: 10px; bottom: 12px;
-    transform: none; max-width: none;
-    border-radius: 26px;
-    flex-direction: column;
-    gap: 0;
-    padding: 14px 12px;
-  }
-  .controls-hidden .controls-bar { transform: translateY(160%); }
-
-  /* Ровно два ряда по четыре: сетка занимает минимум места, а сброс
-     всегда стоит в правом нижнем углу — привычное место и не путается
-     с переключателями рядом. */
-  .controls-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 48px);
-    justify-content: center;
-    gap: 14px;
-    width: 100%;
-  }
-  .controls-grid .ctrl-round--danger {
-    grid-column: 4;
-    grid-row: 2;
-  }
-}
+/* Панель кнопок раскладывается по признаку «палец, а не мышь»,
+   правило ниже по файлу. Копия по ширине убрана: она разошлась с
+   основной, и узкое окно на компьютере получало телефонный вид. */
 
 .ctrl-round {
   position: relative;
@@ -1624,7 +1607,13 @@ a.room-card-btn { text-decoration: none; }
   align-items: center;
   justify-content: center;
 }
-.reaction-btn:hover { transform: scale(1.25); background: var(--surface-3); }
+/* Увеличение только под мышью. На сенсоре состояние наведения прилипает
+   после тапа: эмодзи оставался раздутым и перекрывал соседние. */
+@media (hover: hover) and (pointer: fine) {
+  .reaction-btn:hover { transform: scale(1.25); background: var(--surface-3); }
+}
+/* Под пальцем ту же роль играет прижатие */
+.reaction-btn:active { transform: scale(1.25); background: var(--surface-3); }
 
 .floating-reactions {
   position: absolute;
@@ -2890,3 +2879,142 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   .controls-grid { display: flex; }
   .controls-grid .ctrl-round--danger { grid-column: auto; grid-row: auto; }
 }
+
+/* ── Отклик на прижатие ──
+   Системная вспышка тапа отключена в index.css, а замены не было: из девяноста
+   трёх кнопок подсвечивались девять. Остальные молчали до отпускания, и палец
+   не получал подтверждения, что нажатие вообще засчитано. Первое правило
+   Apple: интерфейс отвечает в момент прижатия, а не после.
+
+   Возврат идёт пружиной и потому прерываем: можно нажать снова, не дожидаясь,
+   пока кнопка вернётся. Прижатие мгновенное, нулевой длительностью. */
+:where(button, [role="button"], .linklike, .vs-option, .avatar-btn):not(:disabled) {
+  transition: transform .34s cubic-bezier(.32,.72,0,1);
+}
+:where(button, [role="button"], .linklike, .vs-option, .avatar-btn):not(:disabled):active {
+  transform: scale(.97);
+  transition-duration: 0s;
+}
+/* Круглым кнопкам в звонке и мелким значкам масштаб нужен заметнее: у них
+   нет фона, по которому видно нажатие */
+:where(.ctrl-round, .fs-btn, .modal-close-btn, .call-link-btn):not(:disabled):active {
+  transform: scale(.92);
+}
+/* Плитки участников и карточки не жмём: они не кнопки, а содержимое */
+:where(.participant-tile, .speaker-thumb, .off-chip) { transition: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  :where(button, [role="button"], .linklike, .vs-option, .avatar-btn):not(:disabled) {
+    transition: none;
+  }
+}
+
+/* ── Шкала трекинга и интерлиньяжа ──
+   Межбуквенное расстояние зависит от размера: крупный текст кажется
+   разреженным и его поджимают в минус, мелкий наоборот нуждается в воздухе.
+   Одно значение на все размеры всегда где-то неверно. Крупные заголовки в
+   этом проекте лежат на div и мимо правил для h1-h3 проходили. */
+.dialing-name, .call-popup-from, .account-modal-title,
+.waiting-title, .admin-header-title, .stage-empty-title, .timeup-title {
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+.timeup-title, .auth-form-head h2 { letter-spacing: -0.03em; line-height: 1.1; }
+
+/* Мелкие подписи заглавными, наоборот, требуют воздуха */
+.field-group label, .account-info-row span { letter-spacing: 0.01em; line-height: 1.35; }
+
+/* ── Экран звонка всегда тёмный ──
+   Пилюли поверх видео брали цвет текста из темы. В светлой теме получался
+   тёмный текст на чёрной подложке, то есть нечитаемо. Здесь фон не зависит
+   от темы, поэтому и цвет фиксированный. */
+.action-msg, .call-notice, .fs-controls, .sounds-panel, .waiting-admit {
+  color: #f2f4f7;
+}
+.action-msg, .call-notice { border-color: rgba(255,255,255,0.10); }
+
+/* ── Материалы ──
+   Крупная поверхность должна читаться толще мелкой. Было наоборот:
+   затемнение на весь экран размывало слабее, чем значок в 32 пикселя. */
+.modal-backdrop { backdrop-filter: blur(20px); }
+.tile-name { backdrop-filter: blur(3px); }
+.pin-chip { backdrop-filter: blur(6px); }
+
+/* ── Доступность материалов ──
+   Пятнадцать поверхностей размывали фон, и ни одна не умела становиться
+   плотной по просьбе системы. Для слабого зрения такой интерфейс нечитаем. */
+@media (prefers-reduced-transparency: reduce) {
+  .chat-overlay, .sounds-panel, .waiting-admit, .reaction-bar, .call-notice,
+  .call-popup, .controls-bar, .call-topbar, .account-modal, .modal-backdrop,
+  .tile-name, .pin-chip, .fs-controls {
+    backdrop-filter: none;
+  }
+  .chat-overlay, .sounds-panel, .call-popup, .account-modal { background: #101216; }
+  .controls-bar, .fs-controls, .call-notice, .waiting-admit { background: #16181d; }
+}
+@media (prefers-contrast: more) {
+  .chat-overlay, .sounds-panel, .call-popup, .account-modal,
+  .controls-bar, .fs-controls, .call-notice {
+    backdrop-filter: none;
+    background: #0a0a0a;
+    border: 1px solid rgba(255,255,255,0.45);
+  }
+  .field-group input, .field-group textarea { border-width: 2px; }
+}
+
+/* Бесконечные пульсации не должны идти при просьбе убрать движение */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ── Цели нажатия не меньше 44 точек ──
+   Палец не попадает в кнопку 28 пикселей, и человек винит себя, а не
+   интерфейс. Внешний вид не меняем: расширяем только область, которая
+   ловит нажатие, невидимым слоем поверх. Под мышью это не нужно. */
+@media (pointer: coarse) {
+  .tile-mute-btn, .call-link-btn, .company-x, .kick-btn, .waiting-admit-btn,
+  .vs--sm .vs-trigger, .mode-seg-btn, .toggle-btn, .contact-btn,
+  .room-card-btn, .tab-btn, .modal-close-btn, .sw, .reaction-btn, .linklike {
+    position: relative;
+  }
+  .tile-mute-btn::after, .call-link-btn::after, .company-x::after,
+  .kick-btn::after, .waiting-admit-btn::after, .vs--sm .vs-trigger::after,
+  .mode-seg-btn::after, .toggle-btn::after, .contact-btn::after,
+  .room-card-btn::after, .tab-btn::after, .modal-close-btn::after,
+  .sw::after, .reaction-btn::after, .linklike::after {
+    content: "";
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+  }
+}
+
+/* ── Безопасные зоны на экранах, до которых руки не дошли ──
+   Вырез и полоска жестов съедали кнопки: человек видит кнопку, жмёт,
+   а попадает в системный жест. */
+.timeup-shell, .deletion-shell, .auth-retry {
+  padding: max(24px, env(safe-area-inset-top))
+           max(24px, env(safe-area-inset-right))
+           max(24px, calc(16px + env(safe-area-inset-bottom)))
+           max(24px, env(safe-area-inset-left));
+}
+.chat-overlay, .settings-overlay { padding-right: env(safe-area-inset-right); }
+.auth-back { left: max(14px, env(safe-area-inset-left)); }
+.screen-fullscreen-btn { right: max(12px, env(safe-area-inset-right)); }
+/* Всплывающие сообщения и реакции уходили под двухрядную панель телефона */
+@media (pointer: coarse) {
+  .action-messages { bottom: calc(70px + env(safe-area-inset-bottom)); left: max(20px, env(safe-area-inset-left)); }
+}
+
+/* На Android адресная строка меняет высоту окна: 100vh давал перелив */
+.video-stage--fs .presenter-layout { height: 100dvh; }
+
+/* Долгое нажатие на имя участника открывало выделение текста поверх звонка */
+.call-fullscreen { -webkit-user-select: none; user-select: none; }
+.call-fullscreen input, .call-fullscreen textarea,
+.msg-bubble, .chat-body { -webkit-user-select: text; user-select: text; }

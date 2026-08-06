@@ -1,5 +1,8 @@
 :root {
-  --sans: Inter, system-ui, 'Segoe UI', Roboto, sans-serif;
+  /* Системный шрифт каждой платформы: у него уже настроены оптические
+     размеры, трекинг и читаемость. Раньше первым стоял Inter, который
+     нигде не загружался, и по факту везде рисовался Arial. */
+  --sans: -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', Roboto, sans-serif;
   font: 16px/145% var(--sans);
   color-scheme: dark;
   text-rendering: optimizeLegibility;
