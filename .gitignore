@@ -48,3 +48,6 @@ client/android/build/
 client/android/app/build/
 client/android/local.properties
 client/android/capacitor-cordova-android-plugins/
+
+# Скачанные сборки Android
+*.apk
