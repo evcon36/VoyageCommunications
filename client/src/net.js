@@ -67,10 +67,48 @@ function isNetworkFailure(e) {
 }
 
 const TIMEOUT_MS = 12000;
+// Первая попытка ждёт недолго: если вход недоступен, десять секунд тишины на
+// запуске человек воспринимает как «приложение сломалось».
+const FIRST_TRY_MS = 3500;
 
-async function tryOnce(origin, path, init) {
+// Гонка входов на старте. Раньше входы перебирались по очереди, и когда
+// первый молчал, запуск упирался в полный таймаут. Пробуем все сразу дешёвым
+// запросом и запоминаем ответивший: дальше всё идёт прямо туда.
+let probing = null;
+export function pickOrigin() {
+  if (CANDIDATES.length < 2) return Promise.resolve(current);
+  if (remembered()) return Promise.resolve(current);
+  if (probing) return probing;
+
+  probing = new Promise((resolve) => {
+    let done = false;
+    const finish = (origin) => {
+      if (done) return;
+      done = true;
+      if (origin) useOrigin(origin);
+      resolve(current);
+    };
+    let left = CANDIDATES.length;
+    for (const origin of CANDIDATES) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), FIRST_TRY_MS);
+      // Запрос заведомо безобидный: спрашиваем о несуществующей комнате,
+      // ничего не создаём и не меняем
+      fetch(`${origin}/rooms/guest-info/__probe__`, { signal: ctrl.signal })
+        .then(() => finish(origin))
+        .catch(() => { if (--left === 0) finish(null); })
+        .finally(() => clearTimeout(timer));
+    }
+    // страховка: даже если молчат все, приложение должно поехать дальше
+    setTimeout(() => finish(null), FIRST_TRY_MS + 300);
+  }).finally(() => { probing = null; });
+
+  return probing;
+}
+
+async function tryOnce(origin, path, init, timeoutMs = TIMEOUT_MS) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     return await fetch(`${origin}${path}`, { ...init, signal: init?.signal || ctrl.signal });
   } finally {
@@ -84,9 +122,14 @@ export async function apiFetch(path, init) {
   const order = [current, ...CANDIDATES.filter(o => o !== current)];
   let lastError = null;
 
-  for (const origin of order) {
+  for (let i = 0; i < order.length; i++) {
+    const origin = order[i];
+    // Пока есть куда переключиться, ждём недолго: смысл запасного входа в
+    // том, чтобы не сидеть в тишине полный таймаут. На последнем даём
+    // полный срок, там торопиться уже некуда.
+    const isLast = i === order.length - 1;
     try {
-      const resp = await tryOnce(origin, path, init);
+      const resp = await tryOnce(origin, path, init, isLast ? TIMEOUT_MS : FIRST_TRY_MS);
       if (origin !== current) useOrigin(origin);
       return resp;
     } catch (e) {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { LK, loadLiveKit, prefetchLiveKit } from './livekit';
-import { serverUrl, apiFetch, mediaOrigin, onOriginChange } from './net';
+import { serverUrl, apiFetch, mediaOrigin, onOriginChange, pickOrigin } from './net';
 // @livekit/track-processors загружается лениво при включении размытия —
 // статический импорт ломает старт на части браузеров (WASM-инициализация)
 import './App.css';
@@ -763,6 +763,11 @@ export default function App() {
   // Auth
   const [authNetError, setAuthNetError] = useState(false);
   const checkAuth = useCallback(async () => {
+    // Сначала выясняем, какой вход отвечает: оба пробуются одновременно, а не
+    // по очереди. Раньше перебор шёл последовательно, и когда первый вход у
+    // оператора молчал, запуск упирался в его полный таймаут — отсюда десять
+    // секунд тишины на экране проверки.
+    await pickOrigin();
     const token = localStorage.getItem('token');
     if (!token) { setAuthChecked(true); return; }
     setAuthNetError(false);
@@ -2140,7 +2145,23 @@ export default function App() {
         return;
       }
 
-      const { token: lkToken, wsUrl, ice } = await resp.json();
+      const { token: lkToken, wsUrl: wsFromServer, ice } = await resp.json();
+
+      // Сервер отдаёт адрес медиасервера жёстко прописанным, и это был третий
+      // домен из трёх. Получалось, что запросы шли через рабочий вход, а сам
+      // разговор всё равно уходил на адрес, который у оператора недоступен:
+      // человек входил в приложение, но в звонок попасть не мог. Путь
+      // /livekit есть на каждом входе, поэтому ведём разговор туда же, куда
+      // ходит остальное.
+      const wsUrl = (() => {
+        try {
+          const here = new URL(serverUrl());
+          const given = new URL(wsFromServer);
+          return `${here.protocol === 'https:' ? 'wss:' : 'ws:'}//${here.host}${given.pathname}`;
+        } catch {
+          return wsFromServer;   // адрес нестандартный — оставляем как прислали
+        }
+      })();
 
       // TURN-креды приходят вместе с токеном комнаты и живут несколько часов.
       // Постоянного пароля в бандле больше нет — иначе TURN мог использовать любой.
