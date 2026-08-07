@@ -18,7 +18,16 @@ const IS_IOS = typeof navigator !== 'undefined' && (
   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 );
 
-const socket = io(serverUrl(), { transports: ['websocket', 'polling'] });
+// Сокет раньше поднимался сразу при загрузке файла, то есть ДО того, как
+// выяснено, какой вход работает. Он уходил на адрес по умолчанию и, если тот
+// у оператора закрыт, честно долбился в него с повторами, показывая «не
+// дозвонились до сервера». Теперь ждём выбора входа: задержка меньше
+// полусекунды, зато первый же запрос идёт по рабочему адресу.
+const socket = io(serverUrl(), { transports: ['websocket', 'polling'], autoConnect: false });
+pickOrigin().then((origin) => {
+  try { socket.io.uri = origin; socket.io.opts.host = undefined; } catch { /* адрес не сменился */ }
+  socket.connect();
+});
 
 // Если запросы к серверу переехали на другой вход, сокет обязан переехать
 // следом. Иначе получается худший случай: приложение живо, экраны работают,
@@ -3179,7 +3188,10 @@ export default function App() {
       )}
 
       {/* Почему звонок не состоялся — иначе человек не понимает, что произошло */}
-      {callNotice && <div className="call-notice">{callNotice}</div>}
+      {/* Плашку показываем только в звонке. На главном экране то же самое
+          уже написано в строке состояния, и человек видел одну ошибку
+          дважды на одном экране. */}
+      {callNotice && joined && <div className="call-notice">{callNotice}</div>}
 
       {/* ── Кто-то стучится в приватную комнату (видит владелец в звонке) ── */}
       {knockRequest && roomInfo?.isOwner && (
@@ -3987,7 +3999,7 @@ export default function App() {
             {accountTab === 'recordings' && (
               <div className="account-section">
                 {recordingsLoading
-                  ? <div className="participants-empty">Загрузка...</div>
+                  ? <div className="skeleton-list" aria-label="Загружаем"><span /><span /><span /></div>
                   : myRecordings.length === 0
                     ? <div className="participants-empty">Записей пока нет. Нажмите «Запись» во время звонка.</div>
                     : <div className="calls-history-list">
@@ -4080,7 +4092,7 @@ export default function App() {
             {accountTab === 'rooms' && (
               <div className="account-section">
                 {myRoomsLoading
-                  ? <div className="participants-empty">Загрузка...</div>
+                  ? <div className="skeleton-list" aria-label="Загружаем"><span /><span /><span /></div>
                   : myRooms.length === 0
                     ? <div className="participants-empty">У вас пока нет комнат. Создайте приватную на главном экране.</div>
                     : <div className="calls-history-list">
@@ -4110,7 +4122,7 @@ export default function App() {
             {accountTab === 'history' && (
               <div className="account-section">
                 {historyLoading
-                  ? <div className="participants-empty">Загрузка...</div>
+                  ? <div className="skeleton-list" aria-label="Загружаем"><span /><span /><span /></div>
                   : callHistory.length === 0
                     ? <div className="participants-empty">История звонков пока пуста</div>
                     : <div className="calls-history-list">
