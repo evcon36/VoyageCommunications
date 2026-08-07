@@ -3144,3 +3144,12 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 @media (prefers-reduced-motion: reduce) {
   .skeleton-list span { animation: none; opacity: .6; }
 }
+
+/* Техническая часть сообщения об ошибке не должна обрезаться: именно она
+   объясняет, на чём порвалось, и именно её человек присылает разработчику. */
+.status-badge--error {
+  white-space: normal;
+  word-break: break-word;
+  max-width: min(94vw, 560px);
+  text-align: left;
+}
