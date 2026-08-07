@@ -99,8 +99,15 @@ export function pickOrigin() {
       const timer = setTimeout(() => ctrl.abort(), FIRST_TRY_MS);
       // Запрос заведомо безобидный: спрашиваем о несуществующей комнате,
       // ничего не создаём и не меняем
+      // Проверять надо не «пришёл ли ответ», а «ответил ли наш сервер».
+      // Заблокированный вход отдаёт свою страницу-заглушку, и это тоже
+      // успешный ответ: он выигрывал гонку, после чего всё приложение
+      // ходило в никуда.
       fetch(`${origin}/rooms/guest-info/__probe__`, { signal: ctrl.signal })
-        .then(() => finish(origin))
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('чужой ответ'))))
+        .then((d) => (d && typeof d === 'object' && 'exists' in d
+          ? finish(origin)
+          : Promise.reject(new Error('ответ не от нашего сервера'))))
         .catch(() => { if (--left === 0) finish(null); })
         .finally(() => clearTimeout(timer));
     }
@@ -135,6 +142,13 @@ export async function apiFetch(path, init) {
     const isLast = i === order.length - 1;
     try {
       const resp = await tryOnce(origin, path, init, isLast ? TIMEOUT_MS : FIRST_TRY_MS);
+      // Заглушки блокировщиков и сбои посредника приходят кодами 5xx. Это не
+      // ответ нашего сервера, поэтому пробуем следующий вход, а не показываем
+      // человеку ошибку.
+      if (!isLast && resp.status >= 502 && resp.status <= 599) {
+        lastError = new Error(`вход ответил ${resp.status}`);
+        continue;
+      }
       if (origin !== current) useOrigin(origin);
       return resp;
     } catch (e) {
