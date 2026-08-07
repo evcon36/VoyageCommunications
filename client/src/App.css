@@ -3116,62 +3116,6 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   border: 1px solid var(--edge-interactive, #5a6272);
 }
 
-/* ── Итог последней встречи ──
-   Расшифровка и краткое содержание это то, ради чего продукт нужен: обычных
-   видеозвонков десять штук, а итог встречи есть не у всех. Лежало это на
-   четвёртом нажатии внутри аккаунта, то есть человек мог пользоваться
-   продуктом месяц и не узнать, что оно есть. Теперь стоит первым, выше полей
-   входа в комнату. */
-.last-call-card {
-  width: 100%;
-  max-width: 560px;
-  margin: 0 auto 18px;
-  padding: 18px 20px;
-  border-radius: 18px;
-  background: var(--surface-1);
-  border: 1px solid var(--edge);
-}
-.last-call-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-.last-call-kicker {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--accent);
-}
-.last-call-when { font-size: 13px; color: var(--text-dim); }
-.last-call-text {
-  margin: 0 0 16px;
-  font-size: 15px;
-  line-height: 1.5;
-  letter-spacing: -0.005em;
-  color: var(--text);
-  /* Показываем начало: полный текст открывается по кнопке, иначе карточка
-     съедает экран и до полей входа человек не доскроллит */
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.last-call-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-.last-call-actions .primary-btn,
-.last-call-actions .ghost-btn { flex: 1 1 160px; padding: 12px 18px; font-size: 14px; }
-
-/* На телефоне карточка занимала почти две трети экрана, и поля входа
-   оказывались на самой границе. Подписи короткие, кнопки помещаются в ряд,
-   а текста хватает трёх строк: полный открывается по кнопке. */
-@media (pointer: coarse) {
-  .last-call-card { padding: 16px; margin-bottom: 14px; }
-  .last-call-text { -webkit-line-clamp: 3; margin-bottom: 14px; font-size: 14px; }
-  .last-call-actions .primary-btn,
-  .last-call-actions .ghost-btn { flex: 1 1 0; padding: 11px 12px; font-size: 13px; }
-}
 
 /* ── Загрузка разделов аккаунта ──
    Панель открывалась почти пустой, с одинокой строкой «Загрузка…»: человек

@@ -1540,21 +1540,6 @@ export default function App() {
   // Ошибка и успех выглядели одинаково: зелёная точка стояла всегда, что бы
   // ни случилось. Вид выводим из текста, чтобы не править полсотни мест, где
   // статус ставится, и чтобы новые сообщения тоже попадали в нужный вид.
-  // Последняя запись, у которой уже готово краткое содержание. Незаконченные
-  // не показываем: обещание итога без итога хуже, чем его отсутствие.
-  const lastSummary = useMemo(
-    () => myRecordings.find(r => r.summary && String(r.summary).trim()),
-    [myRecordings],
-  );
-  const lastCallWhen = useMemo(() => {
-    if (!lastSummary?.startedAt) return '';
-    const d = new Date(lastSummary.startedAt);
-    const days = Math.floor((Date.now() - d.getTime()) / 86400000);
-    if (days === 0) return 'сегодня';
-    if (days === 1) return 'вчера';
-    return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
-  }, [lastSummary]);
-
   const statusKind = (text) => {
     const t = String(text || '').toLowerCase();
     if (/ошибка|не удалось|истекла|недоступ|вышло|прерв|отказ|нет доступа/.test(t)) return 'error';
@@ -4353,31 +4338,6 @@ export default function App() {
               <button className="primary-btn mode-bar-btn" onClick={openEmployee}>
                 <Icon name="users" size={16} /> Кабинет сотрудника
               </button>
-            </div>
-          )}
-
-          {/* Итог последней встречи стоит выше полей входа. Расшифровка и
-              краткое содержание это то, ради чего продукт нужен, а лежали они
-              на четвёртом нажатии внутри аккаунта: человек мог месяц ими
-              пользоваться и не узнать, что они есть. */}
-          {authUser && lastSummary && (
-            <div className="last-call-card">
-              <div className="last-call-head">
-                <span className="last-call-kicker">Итог последней встречи</span>
-                <span className="last-call-when">{lastCallWhen}</span>
-              </div>
-              <p className="last-call-text">{lastSummary.summary}</p>
-              <div className="last-call-actions">
-                <button
-                  className="primary-btn last-call-open"
-                  onClick={() => { setIsAccountPanelOpen(true); setAccountTab('recordings'); }}
-                >
-                  Открыть расшифровку
-                </button>
-                <button className="ghost-btn" onClick={() => downloadSummary(lastSummary)}>
-                  Скачать итог
-                </button>
-              </div>
             </div>
           )}
 
