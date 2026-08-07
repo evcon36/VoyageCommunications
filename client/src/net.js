@@ -77,8 +77,13 @@ const FIRST_TRY_MS = 3500;
 let probing = null;
 export function pickOrigin() {
   if (CANDIDATES.length < 2) return Promise.resolve(current);
-  if (remembered()) return Promise.resolve(current);
   if (probing) return probing;
+
+  // Сохранённый выбор раньше принимался на веру и гонка пропускалась. Из-за
+  // этого приложение намертво залипало: вход запоминался в момент, когда VPN
+  // был включён, а после выключения ходило туда же и молчало. Гонка стоит
+  // меньше полусекунды, поэтому проверяем всегда — сохранённый вход просто
+  // побеждает в ней первым, если он и правда работает.
 
   probing = new Promise((resolve) => {
     let done = false;
