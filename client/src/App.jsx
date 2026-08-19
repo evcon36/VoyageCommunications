@@ -360,6 +360,21 @@ function RemoteAudio({ participant, volume = 1, localMuted = false }) {
 }
 
 // --- Screen share main view ---
+// Пустой раздел: короткий заголовок, объяснение и ровно одно действие.
+// Абзац серым текстом читался как «здесь ничего нет и не будет», а не как
+// «начните отсюда»: человек не понимал, сломано это или просто пусто.
+function EmptyState({ title, text, actionLabel, onAction }) {
+  return (
+    <div className="empty-state">
+      <div className="empty-state-title">{title}</div>
+      {text && <div className="empty-state-text">{text}</div>}
+      {actionLabel && onAction && (
+        <button className="primary-btn empty-state-btn" onClick={onAction}>{actionLabel}</button>
+      )}
+    </div>
+  );
+}
+
 function ScreenShareTile({ participant, isLocal }) {
   const videoRef = useRef(null);
 
@@ -3376,7 +3391,7 @@ export default function App() {
 
               {empTab === 'rooms' && (
                 empRooms.length === 0
-                  ? <div className="participants-empty">Постоянных комнат компании пока нет.</div>
+                  ? <EmptyState title="Переговорок нет" text="Постоянная комната это ссылка, которая не меняется: её удобно закрепить в календаре." />
                   : empRooms.map(r => (
                     <div className="admin-room-row" key={r.slug}>
                       <div className="admin-room-info">
@@ -3494,7 +3509,7 @@ export default function App() {
                     <button onClick={createDepartment}>Создать</button>
                   </div>
                   {adminDepartments.length === 0
-                    ? <div className="participants-empty">Отделов пока нет. Создайте структуру компании — затем назначайте сотрудников во вкладке «Сотрудники».</div>
+                    ? <EmptyState title="Отделов пока нет" text="Создайте структуру компании, потом назначайте в неё сотрудников." actionLabel="Создать первый отдел" onAction={() => setNewDepName(v => v || "Продажи")} />
                     : adminDepartments.map(d => (
                       <div className="admin-room-row" key={d.id}>
                         <div className="admin-room-info">
@@ -3515,13 +3530,16 @@ export default function App() {
               {adminTab === 'analytics' && (
                 <div className="admin-analytics">
                   <div className="admin-stats-grid">
-                    <div className="admin-stat"><div className="admin-stat-num">{adminAnalytics?.summary?.employees ?? '—'}</div><div className="admin-stat-label">Сотрудников</div></div>
-                    <div className="admin-stat"><div className="admin-stat-num">{adminAnalytics?.summary?.activeThisWeek ?? '—'}</div><div className="admin-stat-label">Активны за неделю</div></div>
-                    <div className="admin-stat"><div className="admin-stat-num">{adminAnalytics?.summary?.totalMinutes ?? '—'}</div><div className="admin-stat-label">Минут суммарно</div></div>
-                    <div className="admin-stat"><div className="admin-stat-num">{adminAnalytics?.summary?.avgMinutes ?? '—'}</div><div className="admin-stat-label">Минут в среднем</div></div>
+                    {/* Прочерк означает «неизвестно», ноль означает «ничего не было». Пока
+                        данные не пришли — прочерк, после загрузки — настоящий ноль:
+                        раньше пустая компания выглядела как сломанная. */}
+                    <div className="admin-stat"><div className="admin-stat-num">{adminAnalytics ? (adminAnalytics.summary?.employees ?? 0) : '—'}</div><div className="admin-stat-label">Сотрудников</div></div>
+                    <div className="admin-stat"><div className="admin-stat-num">{adminAnalytics ? (adminAnalytics.summary?.activeThisWeek ?? 0) : '—'}</div><div className="admin-stat-label">Активны за неделю</div></div>
+                    <div className="admin-stat"><div className="admin-stat-num">{adminAnalytics ? (adminAnalytics.summary?.totalMinutes ?? 0) : '—'}</div><div className="admin-stat-label">Минут суммарно</div></div>
+                    <div className="admin-stat"><div className="admin-stat-num">{adminAnalytics ? (adminAnalytics.summary?.avgMinutes ?? 0) : '—'}</div><div className="admin-stat-label">Минут в среднем</div></div>
                   </div>
                   {(!adminAnalytics || adminAnalytics.rows.length === 0)
-                    ? <div className="participants-empty">Данных пока нет. Статистика появится после звонков в комнатах компании.</div>
+                    ? <EmptyState title="Пока нечего показывать" text="Статистика появится после первых звонков в комнатах компании." />
                     : <div className="analytics-table">
                         <div className="analytics-head">
                           <span className="ac-name">Сотрудник</span>
@@ -3603,7 +3621,7 @@ export default function App() {
 
               {adminTab === 'recordings' && (
                 adminRecordings.length === 0
-                  ? <div className="participants-empty">Записей встреч компании пока нет.</div>
+                  ? <EmptyState title="Записей нет" text="Запись включается кнопкой во время звонка и доступна, когда все участники вошли в свои аккаунты." />
                   : <div className="calls-history-list">
                       {adminRecordings.map(rec => (
                         <div className="call-history-card" key={rec.id}>
@@ -3655,7 +3673,7 @@ export default function App() {
 
               {adminTab === 'audit' && (
                 adminAudit.length === 0
-                  ? <div className="participants-empty">Журнал пуст.</div>
+                  ? <EmptyState title="Журнал пуст" text="Здесь появятся действия сотрудников: кто кого добавил, кто менял комнаты и роли." />
                   : <div className="admin-audit">
                       {adminAudit.map(a => (
                         <div className="admin-audit-row" key={a.id}>
@@ -3814,6 +3832,15 @@ export default function App() {
 
             {accountTab === 'profile' && (
               <div className="account-section">
+                {/* Переключатель режима лежал внутри «Бизнеса» и «Сотрудника»:
+                    чтобы сменить режим, надо было сначала попасть в раздел,
+                    который этим режимом и открывается. Здесь он доступен всегда. */}
+                <div className="mode-pick">
+                  <div className="mode-pick-title">Режим работы</div>
+                  <div className="mode-pick-sub">Обычный: личные звонки. Бизнес: управление компанией. Сотрудник: рабочий кабинет.</div>
+                  {modeSelector}
+                </div>
+
                 <div className="profile-head">
                   <button
                     className="avatar-btn"
@@ -3992,7 +4019,7 @@ export default function App() {
                 {recordingsLoading
                   ? <div className="skeleton-list" aria-label="Загружаем"><span /><span /><span /></div>
                   : myRecordings.length === 0
-                    ? <div className="participants-empty">Записей пока нет. Нажмите «Запись» во время звонка.</div>
+                    ? <EmptyState title="Записей нет" text="Нажмите «Запись» во время звонка. После него здесь появятся расшифровка и краткое содержание." />
                     : <div className="calls-history-list">
                         {myRecordings.map(rec => {
                           const durSec = rec.endedAt ? Math.round((new Date(rec.endedAt) - new Date(rec.startedAt)) / 1000) : null;
