@@ -3251,3 +3251,33 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   gap: 16px;
 }
 .setup-actions { gap: 10px; margin-top: 4px; }
+
+/* ── Иерархия в звонке ──
+   Слева в шапке шли шесть равновесных элементов: знак, название комнаты,
+   остаток времени, копирование ссылки, таймер, качество связи. Ничто не
+   выделялось, а первыми человек должен видеть запись и оставшееся время.
+   Цвет остаётся только у них, остальное приглушается. */
+.call-topbar .brand,
+.call-room-badge,
+.call-link-btn { opacity: .55; }
+.call-timer { opacity: .8; }
+.rec-badge, .guest-left--soon { opacity: 1; }
+
+/* ── Размер по частоте нажатия ──
+   Десять круглых кнопок были одного размера, хотя микрофон и камеру жмут
+   в разы чаще остального. Размер должен отражать, что нужнее. */
+@media (pointer: coarse) {
+  .controls-grid .ctrl-round:nth-child(1),
+  .controls-grid .ctrl-round:nth-child(2) {
+    width: 56px;
+    height: 56px;
+  }
+  .controls-grid .ctrl-round:nth-child(1) svg,
+  .controls-grid .ctrl-round:nth-child(2) svg { transform: scale(1.15); }
+  /* сетка подстраивается под увеличенные первые две */
+  .controls-grid { grid-template-columns: 56px 56px 48px 48px; align-items: center; }
+}
+
+/* Кнопка завершения остаётся самой заметной: это единственное действие,
+   которое нельзя отменить */
+.ctrl-round--danger { width: 56px; height: 56px; }
