@@ -927,6 +927,18 @@ export default function App() {
   }, []);
 
   // скачать расшифровку текстовым файлом (с таймкодами). ai=true — версия ИИ
+  // Расшифровку и итоги можно было только скачать файлом: то, ради чего
+  // продукт и нужен, пряталось за кнопкой загрузки, и человек не видел
+  // результата, пока не откроет его в другой программе.
+  const [openRec, setOpenRec] = useState(null);   // id раскрытой записи
+  const [recView, setRecView] = useState('summary'); // что показываем: итоги или расшифровка
+  const [recSearch, setRecSearch] = useState('');
+
+  const fmtTime = (sec) => {
+    const m = Math.floor(sec / 60), ss = Math.floor(sec % 60);
+    return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+  };
+
   const downloadTranscript = (rec, ai = false) => {
     const segments = ai ? rec.transcriptAi : rec.transcript;
     if (!Array.isArray(segments) || !segments.length) return;
@@ -972,7 +984,7 @@ export default function App() {
   // скачать саммари файлом
   const downloadSummary = (rec) => {
     if (!rec.summary) return;
-    const blob = new Blob(['﻿' + `Саммари звонка #${rec.roomId}\nДата: ${new Date(rec.startedAt).toLocaleString('ru-RU')}\n\n` + rec.summary], { type: 'text/plain;charset=utf-8' });
+    const blob = new Blob(['﻿' + `Итоги звонка #${rec.roomId}\nДата: ${new Date(rec.startedAt).toLocaleString('ru-RU')}\n\n` + rec.summary], { type: 'text/plain;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `саммари-${rec.roomId}.txt`;
@@ -4048,31 +4060,107 @@ export default function App() {
                                   )}
                                   {rec.transcriptStatus === 'done' && Array.isArray(rec.transcript) && rec.transcript.length > 0 && (
                                     <>
+                                      {/* Открыть прямо здесь, а не скачивать: ради этого
+                                          продукт и выбирают, и это должно быть первым
+                                          действием, а не спрятанным в файле */}
+                                      <button
+                                        className="primary-btn room-card-btn"
+                                        onClick={() => {
+                                          setOpenRec(openRec === rec.id ? null : rec.id);
+                                          setRecView(rec.summary ? 'summary' : 'text');
+                                          setRecSearch('');
+                                        }}
+                                      >
+                                        <Icon name="notes" size={14} /> {openRec === rec.id ? 'Свернуть' : 'Читать'}
+                                      </button>
                                       <button className="ghost-btn room-card-btn" onClick={() => downloadTranscript(rec, false)}>
                                         <Icon name="download" size={14} /> Текст
                                       </button>
                                       {rec.aiStatus === 'done' && Array.isArray(rec.transcriptAi) ? (
                                         <button className="ghost-btn room-card-btn" onClick={() => downloadTranscript(rec, true)}>
-                                          <Icon name="download" size={14} /> Текст ИИ
+                                          <Icon name="download" size={14} /> Причёсанный текст
                                         </button>
                                       ) : rec.aiStatus !== 'processing' && (
                                         <button className="ghost-btn room-card-btn" onClick={() => enhanceTranscript(rec.id)}>
-                                          <Icon name="sparkles" size={14} /> {rec.aiStatus === 'failed' ? 'Повторить ИИ' : 'Улучшить ИИ'}
+                                          <Icon name="sparkles" size={14} /> {rec.aiStatus === 'failed' ? 'Причесать заново' : 'Причесать текст'}
                                         </button>
                                       )}
                                       {rec.summaryStatus === 'done' && rec.summary ? (
                                         <button className="ghost-btn room-card-btn" onClick={() => downloadSummary(rec)}>
-                                          <Icon name="download" size={14} /> Саммари
+                                          <Icon name="download" size={14} /> Итоги
                                         </button>
                                       ) : rec.summaryStatus !== 'processing' && (
                                         <button className="ghost-btn room-card-btn" onClick={() => requestSummary(rec.id)}>
-                                          <Icon name="notes" size={14} /> {rec.summaryStatus === 'failed' ? 'Повторить саммари' : 'Саммари ИИ'}
+                                          <Icon name="notes" size={14} /> {rec.summaryStatus === 'failed' ? 'Собрать итоги заново' : 'Краткие итоги'}
                                         </button>
                                       )}
                                     </>
                                   )}
                                 </div>
                               )}
+                              {/* Чтение прямо в приложении: итоги встречи и полная
+                                  расшифровка с поиском по сказанному. Раньше это
+                                  существовало только в скачанном файле. */}
+                              {openRec === rec.id && (
+                                <div className="rec-reader">
+                                  <div className="rec-reader-tabs">
+                                    <button
+                                      className={`rec-reader-tab${recView === 'summary' ? ' rec-reader-tab--active' : ''}`}
+                                      onClick={() => setRecView('summary')}
+                                      disabled={!rec.summary}
+                                      title={rec.summary ? undefined : 'Итоги ещё не собраны'}
+                                    >Итоги</button>
+                                    <button
+                                      className={`rec-reader-tab${recView === 'text' ? ' rec-reader-tab--active' : ''}`}
+                                      onClick={() => setRecView('text')}
+                                    >Расшифровка</button>
+                                  </div>
+
+                                  {recView === 'summary' && (
+                                    rec.summary
+                                      ? <div className="rec-summary">{rec.summary}</div>
+                                      : <EmptyState
+                                          title="Итоги ещё не собраны"
+                                          text="Нажмите «Краткие итоги» выше: ИИ прочитает расшифровку и выделит главное."
+                                        />
+                                  )}
+
+                                  {recView === 'text' && (() => {
+                                    const segs = (rec.aiStatus === 'done' && Array.isArray(rec.transcriptAi) && rec.transcriptAi.length)
+                                      ? rec.transcriptAi
+                                      : rec.transcript;
+                                    const q = recSearch.trim().toLowerCase();
+                                    const shown = q ? segs.filter(x => String(x.text || '').toLowerCase().includes(q)) : segs;
+                                    return (
+                                      <>
+                                        <input
+                                          className="rec-search"
+                                          value={recSearch}
+                                          onChange={e => setRecSearch(e.target.value)}
+                                          placeholder="Найти по сказанному"
+                                        />
+                                        {q && (
+                                          <div className="rec-found">
+                                            {shown.length === 0
+                                              ? 'Ничего не нашлось'
+                                              : `Нашлось: ${shown.length} из ${segs.length}`}
+                                          </div>
+                                        )}
+                                        <div className="rec-lines">
+                                          {shown.map((seg, i) => (
+                                            <div className="rec-line" key={i}>
+                                              <span className="rec-line-time">{fmtTime(seg.start)}</span>
+                                              <span className="rec-line-who">{seg.speaker || 'Говорящий'}</span>
+                                              <span className="rec-line-text">{seg.text}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </>
+                                    );
+                                  })()}
+                                </div>
+                              )}
+
                               {rec.transcriptStatus === 'processing' && (
                                 <div className="transcript-status">
                                   <span className="spinner" /> Расшифровка речи… обычно 1–2 минуты на минуту записи
@@ -4080,7 +4168,7 @@ export default function App() {
                               )}
                               {rec.aiStatus === 'processing' && (
                                 <div className="transcript-status">
-                                  <span className="spinner" /> ИИ исправляет ошибки распознавания…
+                                  <span className="spinner" /> Приводим текст в порядок: убираем ошибки распознавания…
                                 </div>
                               )}
                               {rec.summaryStatus === 'processing' && (
@@ -4095,7 +4183,7 @@ export default function App() {
                                 <div className="transcript-status">
                                   {rec.aiStatus === 'failed' && rec.summaryStatus === 'failed'
                                     ? 'ИИ-обработка и саммари не удались'
-                                    : rec.aiStatus === 'failed' ? 'ИИ-обработка не удалась' : 'Саммари не удалось'}
+                                    : rec.aiStatus === 'failed' ? 'ИИ-обработка не удалась' : 'Итоги не удалось'}
                                   {' — сервис ИИ был недоступен. Нажмите «Повторить», расшифровка при этом сохранена.'}
                                 </div>
                               )}
