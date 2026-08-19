@@ -3153,3 +3153,101 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   max-width: min(94vw, 560px);
   text-align: left;
 }
+
+/* ═══ Стиль Apple: форма, а не цвет ═══
+   Цвета и фирменный знак остаются прежними. Меняется то, как устроены
+   элементы: у Apple кнопка это широкий прямоугольник со спокойным
+   скруглением и ровным весом текста, а не капсула с тенью и подсветкой;
+   разделы собраны в карточки с воздухом между ними; заголовок крупный и
+   поджатый, а не мелкий вразрядку. */
+
+/* ── Кнопки ──
+   Референс: кнопка «Отлично». Во всю ширину, скругление 14, текст обычного
+   веса по центру, никакого свечения. Подсветка и тень были из другой
+   традиции: они спорят с плоскими поверхностями вокруг. */
+.primary-btn,
+.ghost-btn {
+  height: 50px;
+  border-radius: 14px;
+  font-weight: 590;              /* вес между обычным и жирным, как у Apple */
+  letter-spacing: -0.01em;
+  font-size: 17px;               /* базовый размер кнопки в iOS */
+  box-shadow: none;
+  white-space: normal;
+}
+.primary-btn {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.ghost-btn {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+
+/* Полная ширина там, где кнопка это главное действие экрана */
+.setup-actions .primary-btn,
+.setup-actions .ghost-btn,
+.auth-form button[type="submit"],
+.timeup-actions .primary-btn,
+.timeup-actions .ghost-btn { width: 100%; }
+
+/* ── Заголовки ──
+   Крупно и поджато. Мелкий заголовок вразрядку читается как служебная
+   подпись, а не как название экрана. */
+.account-modal-title,
+.admin-header-title,
+.waiting-title,
+.timeup-title,
+.stage-empty-title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.12;
+}
+
+/* ── Поля ввода ──
+   Сплошная поверхность со спокойным скруглением вместо обводки: у Apple
+   поле отличается от фона заливкой, а не рамкой. */
+.field-group input,
+.field-group textarea,
+.field-group select,
+.text-input,
+.contact-search {
+  height: 50px;
+  border-radius: 14px;
+  border: none;
+  background: var(--surface-2);
+  font-size: 17px;
+}
+.field-group textarea { height: auto; padding: 14px; }
+.field-group input:focus,
+.field-group textarea:focus,
+.text-input:focus,
+.contact-search:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 0;
+}
+
+/* ── Подписи полей ──
+   Были заглавными вразрядку. У Apple подпись это обычный текст обычного
+   размера: заглавные вразрядку кричат там, где надо просто назвать поле. */
+.field-group label {
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+/* ── Карточка входа ──
+   Была объявлена, но прозрачна и без границы: два поля висели в пустоте, и
+   взгляду не за что зацепиться. Теперь это сгруппированный блок, как в
+   настройках iOS. */
+.setup-card {
+  background: var(--surface-1);
+  border-radius: 18px;
+  padding: 18px;
+  gap: 16px;
+}
+.setup-actions { gap: 10px; margin-top: 4px; }
