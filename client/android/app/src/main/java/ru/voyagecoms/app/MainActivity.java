@@ -20,8 +20,28 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(CallNotifier.class);
         super.onCreate(savedInstanceState);
         askForMedia();
+        handleCallAction(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        // Приложение уже было открыто, и человек нажал «Ответить» в
+        // уведомлении: окно не пересоздаётся, поэтому решение приходит сюда
+        handleCallAction(intent);
+    }
+
+    /** Ответ из уведомления: убираем его и сообщаем приложению. */
+    private void handleCallAction(android.content.Intent intent) {
+        if (intent == null || intent.getAction() == null) return;
+        if (CallNotifier.ACTION_ACCEPT.equals(intent.getAction())) {
+            CallNotifier.dismiss(this);
+            CallNotifier.deliver("accept");
+        }
     }
 
     private void askForMedia() {

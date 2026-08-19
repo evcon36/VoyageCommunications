@@ -33,6 +33,16 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+
+        <!-- Отклонение из уведомления не требует открывать приложение -->
+        <receiver
+            android:name=".DeclineReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="ru.voyagecoms.app.CALL_DECLINE" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
     <!-- Permissions -->
@@ -47,6 +57,13 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- Состояние сети: приложение переключает вход при обрыве -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Входящий звонок должен доходить, даже когда приложение свёрнуто, а
+         экран заблокирован: без этих прав уведомление будет обычным, его
+         легко пропустить, а для звонилки это главный сценарий. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Планшеты и телефоны без камеры тоже пускаем: человек может прийти
          послушать, поэтому железо не объявляем обязательным -->

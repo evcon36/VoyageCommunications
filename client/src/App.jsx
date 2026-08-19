@@ -363,6 +363,21 @@ function RemoteAudio({ participant, volume = 1, localMuted = false }) {
 // Пустой раздел: короткий заголовок, объяснение и ровно одно действие.
 // Абзац серым текстом читался как «здесь ничего нет и не будет», а не как
 // «начните отсюда»: человек не понимал, сломано это или просто пусто.
+// Оповещение о звонке средствами системы: на Windows через мост настольного
+// приложения, на Android через родной плагин. В браузере ничего этого нет, и
+// вызовы просто ничего не делают.
+function callPlugin() {
+  return window.Capacitor?.Plugins?.CallNotifier || null;
+}
+function notifyIncoming(from) {
+  window.comsDesktop?.incomingCall?.({ from });
+  callPlugin()?.show({ from }).catch(() => { /* нет разрешения на уведомления */ });
+}
+function clearIncomingNotice() {
+  window.comsDesktop?.callEnded?.();
+  callPlugin()?.hide().catch(() => { /* уведомления и не было */ });
+}
+
 function EmptyState({ title, text, actionLabel, onAction }) {
   return (
     <div className="empty-state">
@@ -1646,6 +1661,24 @@ export default function App() {
 
   useEffect(() => { if (authUser) fetchContacts(); }, [authUser, fetchContacts]);
 
+  // Кнопки «Ответить» и «Отклонить» в системном уведомлении настольного
+  // приложения. Нажатие приходит сюда, поэтому звонок можно принять, не
+  // разворачивая окно: ровно так ведут себя обычные звонилки.
+  useEffect(() => {
+    const handle = (action) => {
+      if (action === 'accept') acceptCallRef.current?.();
+      else declineCallRef.current?.();
+    };
+    const offDesktop = window.comsDesktop?.onCallAction?.(handle);
+    const plugin = callPlugin();
+    const sub = plugin?.addListener?.('callAction', (e) => handle(e?.action));
+    return () => {
+      offDesktop?.();
+      // подписка приходит обещанием, снимаем когда доедет
+      Promise.resolve(sub).then(h => h?.remove?.()).catch(() => {});
+    };
+  }, []);
+
   // Медиадвижок тянем фоном сразу после первого экрана: к моменту входа в
   // звонок он обычно уже на месте, а первый экран его не ждёт.
   useEffect(() => { prefetchLiveKit(); }, []);
@@ -1792,6 +1825,9 @@ export default function App() {
     return () => clearTimeout(id);
   }, [callNotice]);
 
+  const acceptCallRef = useRef(null);
+  const declineCallRef = useRef(null);
+
   const acceptCall = async () => {
     const c = call;
     if (!c || c.role !== 'in') return;
@@ -1799,6 +1835,7 @@ export default function App() {
     // Раньше клиент входил сразу, и при ответе с двух устройств оба
     // оказывались в комнате: отказ приходил уже после входа.
     socket.emit('call-accept', { callId: c.callId });
+    clearIncomingNotice();
     // Обязательно выйти из текущего звонка: иначе микрофон остаётся в старой
     // комнате и прежние собеседники продолжают нас слышать.
     if (joined) await leaveCall();
@@ -1808,7 +1845,11 @@ export default function App() {
   const declineCall = () => {
     if (call?.callId) socket.emit('call-decline', { callId: call.callId });
     setCall(null);
+    clearIncomingNotice();
   };
+
+  acceptCallRef.current = acceptCall;
+  declineCallRef.current = declineCall;
 
   const cancelCall = () => {
     if (call?.callId) socket.emit('call-cancel', { callId: call.callId });
@@ -1914,6 +1955,11 @@ export default function App() {
         peer: c.from, peerName: c.fromName || c.from,
         roomSlug: c.roomSlug, inviteKey: c.inviteKey,
       });
+      // Звонок должен доходить, даже когда приложение свёрнуто. На Windows
+      // окно поднимается поверх всех и мигает в панели задач, на Android
+      // система показывает звонок поверх заблокированного экрана. В браузере
+      // ни того, ни другого нет, там звонок виден только внутри вкладки.
+      notifyIncoming(c.fromName || c.from);
     });
     socket.on('call-ringing', ({ callId }) => setCall(p => (p ? { ...p, callId } : p)));
     // Собеседник принял: входим в комнату. Проверка callRef обязательна —
@@ -1936,6 +1982,9 @@ export default function App() {
     socket.on('call-ended', ({ reason }) => {
       setCall(null);
       setCallNotice(CALL_END_TEXT[reason] || 'Звонок завершён');
+      // Уведомление системы и мигание панели задач должны сняться, чем бы
+      // звонок ни кончился: иначе окно остаётся липким поверх всех
+      clearIncomingNotice();
     });
     socket.on('knock', (req) => setKnockQueue(prev =>
       prev.some(r => r.username === req.username && r.roomId === req.roomId) ? prev : [...prev, req]));

@@ -1,6 +1,6 @@
 const {
   app, BrowserWindow, session, desktopCapturer, shell,
-  Tray, Menu, ipcMain, nativeImage, dialog,
+  Tray, Menu, ipcMain, nativeImage, dialog, Notification,
 } = require('electron');
 const path = require('path');
 const net = require('net');
@@ -423,3 +423,84 @@ ipcMain.on('app:retry', async () => {
   const ep = await pickEndpoint();
   if (ep) mainWindow.loadURL(ep.url);
 });
+
+// ── Входящий звонок средствами системы ──
+//
+// Раньше звонок существовал только внутри окна приложения. Свёрнутое окно о
+// нём никак не сообщало: человек видел пропущенный звонок постфактум, а
+// звонивший всё это время слушал гудки. Для приложения про звонки это
+// главный сценарий, и он не работал.
+//
+// Теперь окно поднимается поверх всех, мигает в панели задач, а система
+// показывает уведомление с ответом и отклонением. Отдельного окна звонка не
+// делаем: у приложения уже есть свой экран входящего, ему достаточно
+// оказаться перед глазами.
+
+let callNotification = null;
+let restoreAlwaysOnTop = null;
+
+function clearCallUi() {
+  if (callNotification) {
+    try { callNotification.close(); } catch { /* уже закрыто системой */ }
+    callNotification = null;
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.flashFrame(false); } catch { /* не на всех системах */ }
+    if (restoreAlwaysOnTop !== null) {
+      try { mainWindow.setAlwaysOnTop(restoreAlwaysOnTop); } catch { /* окно закрыто */ }
+      restoreAlwaysOnTop = null;
+    }
+  }
+}
+
+ipcMain.on('call:incoming', (_e, payload) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const who = String((payload && payload.from) || 'Кто-то').slice(0, 60);
+
+  // Показать окно, даже если оно свёрнуто или спрятано в трей
+  try {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    // Поверх всех, но не навсегда: возвращаем прежнее состояние после звонка,
+    // иначе окно останется липким и будет мешать работе
+    if (restoreAlwaysOnTop === null) restoreAlwaysOnTop = mainWindow.isAlwaysOnTop();
+    mainWindow.setAlwaysOnTop(true);
+    mainWindow.focus();
+    // Мигание в панели задач: если человек в другом приложении, окно перед
+    // глазами он всё равно не увидит
+    mainWindow.flashFrame(true);
+  } catch { /* окно уничтожено между проверкой и вызовом */ }
+
+  if (!Notification.isSupported()) return;
+  try {
+    if (callNotification) callNotification.close();
+    callNotification = new Notification({
+      title: 'Входящий звонок',
+      body: `${who} звонит в COMS`,
+      urgency: 'critical',
+      timeoutType: 'never',
+      actions: [
+        { type: 'button', text: 'Ответить' },
+        { type: 'button', text: 'Отклонить' },
+      ],
+      icon: path.join(__dirname, 'assets', 'icon.png'),
+    });
+    // Нажатие по самому уведомлению равносильно ответу: это ожидаемое действие
+    callNotification.on('click', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('call:action', 'accept');
+      clearCallUi();
+    });
+    callNotification.on('action', (_ev, index) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('call:action', index === 0 ? 'accept' : 'decline');
+      }
+      clearCallUi();
+    });
+    callNotification.on('close', () => { callNotification = null; });
+    callNotification.show();
+  } catch (e) {
+    console.error('Не удалось показать уведомление о звонке:', e.message);
+  }
+});
+
+ipcMain.on('call:ended', clearCallUi);
