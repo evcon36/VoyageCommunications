@@ -653,9 +653,12 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
 /* ── Chat overlay ── */
 .chat-overlay {
   position: fixed;
-  top: var(--vv-top, 0px);
+  /* Панель стоит на месте, даже когда вылезает клавиатура: раньше вместе с
+     ней уезжала вся панель, включая заголовок и переписку. Поднимается
+     только строка ввода, отступ под неё считается из высоты клавиатуры. */
+  top: 0;
   right: 0;
-  height: var(--vvh, 100dvh);   /* --vvh/--vv-top из visualViewport (main.jsx) — учитывают клавиатуру на iOS */
+  height: 100dvh;
   width: 360px;
   max-width: 100%;
   z-index: 60;
@@ -3597,7 +3600,9 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
    волосяной толщины, опасное действие красным. */
 .msg-menu {
   position: fixed;
-  z-index: 60;
+  /* Выше чата: у них был одинаковый слой, и меню открывалось ПОД панелью
+     чата, то есть нажатие срабатывало, а видно ничего не было */
+  z-index: 90;
   min-width: 180px;
   padding: 6px;
   border-radius: 14px;
@@ -3639,3 +3644,78 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 /* Долгое нажатие не должно выделять текст сообщения */
 .msg { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .msg-edit-input { -webkit-user-select: text; user-select: text; }
+
+/* ── Крупная плитка при показе экрана ──
+   Камера растягивалась на всю сцену с обрезкой: лицо раздувалось во весь
+   экран и от человека оставались одни глаза. Крупное видео показываем
+   целиком, как и в сетке: лучше поля по краям, чем такое. */
+.stage-big .participant-tile video,
+.stage-big .screen-share-tile video {
+  object-fit: contain;
+  object-position: center;
+  background: #000;
+}
+
+/* ── Действия над сообщением на телефоне ──
+   Маленькое меню у пальца попадает под сам палец, поэтому на телефоне это
+   лист: экран затемняется, нажатое сообщение поднимается над затемнением,
+   а кнупки идут крупными строками снизу. */
+.msg-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 12px max(20px, calc(12px + env(safe-area-inset-bottom)));
+  background: rgba(0,0,0,.5);
+  backdrop-filter: blur(6px);
+  animation: sheet-fade .18s ease;
+}
+/* Нажатое сообщение видно поверх затемнения: понятно, с чем работаешь */
+.msg-sheet-preview {
+  max-width: min(88vw, 460px);
+  margin-bottom: auto;
+  margin-top: auto;
+  padding: 12px 16px;
+  border-radius: 18px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 16px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.msg-sheet-preview img { display: block; max-width: 100%; max-height: 40vh; border-radius: 12px; }
+.msg-sheet-preview img + span { display: block; margin-top: 8px; }
+
+.msg-sheet, .msg-sheet-cancel {
+  width: min(100%, 460px);
+  border-radius: 16px;
+  background: rgba(32,35,43,.94);
+  backdrop-filter: blur(24px) saturate(180%);
+  overflow: hidden;
+}
+.msg-sheet { display: flex; flex-direction: column; }
+.msg-sheet button, .msg-sheet-cancel {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 17px;
+  padding: 17px 16px;
+  cursor: pointer;
+  width: 100%;
+}
+.msg-sheet button + button { border-top: 1px solid rgba(255,255,255,.09); }
+.msg-sheet button:active, .msg-sheet-cancel:active { background: rgba(255,255,255,.1); }
+.msg-sheet-cancel { font-weight: 590; }
+@keyframes sheet-fade { from { opacity: 0 } to { opacity: 1 } }
+@media (prefers-reduced-motion: reduce) { .msg-sheet-backdrop { animation: none } }
+
+/* Строка ввода поднимается ровно на высоту клавиатуры */
+.chat-input-row { margin-bottom: var(--kb, 0px); transition: margin-bottom .18s ease; }
+/* Лента при этом ужимается, чтобы последнее сообщение осталось видно */
+.chat-body { padding-bottom: 4px; }
+@media (prefers-reduced-motion: reduce) { .chat-input-row { transition: none } }

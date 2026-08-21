@@ -42,9 +42,15 @@ if (window.visualViewport) {
     if (zoomed) {
       root.removeProperty('--vvh');
       root.removeProperty('--vv-top');
+      root.removeProperty('--kb');
       return;
     }
     root.setProperty('--vvh', `${vv.height}px`);
+    // Высота клавиатуры отдельно: панель чата должна стоять на месте, а
+    // подниматься только строка ввода. Раньше вместе с клавиатурой уезжала
+    // вся панель целиком, вместе с заголовком и перепиской.
+    const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    root.setProperty('--kb', `${kb}px`);
     // На iOS клавиатура НЕ сжимает layout viewport: страница уезжает вверх, а
     // position:fixed остаётся привязан к layout — панели «улетают» за экран.
     // offsetTop показывает это смещение, компенсируем его сдвигом сверху.
@@ -68,6 +74,7 @@ if (window.visualViewport) {
       const root = document.documentElement.style;
       root.removeProperty('--vvh');
       root.removeProperty('--vv-top');
+      root.removeProperty('--kb');
       return;
     }
     setVv();

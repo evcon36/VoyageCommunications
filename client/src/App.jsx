@@ -2846,13 +2846,21 @@ export default function App() {
     // Отправить можно и один файл без подписи, и подпись без файла, но не
     // пустоту
     if ((!text && !pending?.url) || !joined) return;
-    socket.emit('chat-message', {
-      roomId: roomIdRef.current,
-      userName: userName.trim() || 'Участник',
-      text,
-      attachment: pending?.url ? { url: pending.url, name: pending.name, size: pending.size, kind: pending.kind } : undefined,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    });
+    const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const base = { roomId: roomIdRef.current, userName: userName.trim() || 'Участник', timestamp: stamp };
+
+    // Вложение и текст уходят разными сообщениями. В одном пузыре они
+    // верстались рядом, и подпись ломалась по букве: «при» на одной строке,
+    // «вет» на другой. Отдельными сообщениями и выглядит понятнее, и удалить
+    // можно по отдельности.
+    if (pending?.url) {
+      socket.emit('chat-message', {
+        ...base,
+        text: '',
+        attachment: { url: pending.url, name: pending.name, size: pending.size, kind: pending.kind },
+      });
+    }
+    if (text) socket.emit('chat-message', { ...base, text });
     setMessageText('');
     setPending(null);
   };
@@ -2888,6 +2896,12 @@ export default function App() {
   const cancelLongPress = () => {
     clearTimeout(longPressRef.current);
     longPressRef.current = null;
+  };
+  // Листание ленты не должно превращаться в долгое нажатие: палец лежит на
+  // сообщении и во время прокрутки
+  const maybeCancelOnMove = (e) => {
+    if (!longPressRef.current) return;
+    if (Math.abs(e.movementY) > 4 || Math.abs(e.movementX) > 4) cancelLongPress();
   };
 
   // Меню закрывается по любому действию снаружи и по прокрутке: висящее
@@ -3535,26 +3549,44 @@ export default function App() {
       {/* Меню сообщения: правой кнопкой или долгим нажатием. Появляется у
           пальца, но не вылезает за край экрана. */}
       {msgMenu && (
-        <div
-          className="msg-menu"
-          style={{
-            left: Math.min(msgMenu.x, window.innerWidth - 190),
-            top: Math.min(msgMenu.y, window.innerHeight - 130),
-          }}
-          onPointerDown={e => e.stopPropagation()}
-        >
-          {msgMenu.msg.text && (
-            <button onClick={() => { startEdit(msgMenu.msg); setMsgMenu(null); }}>
-              Изменить
-            </button>
-          )}
-          <button
-            className="msg-menu-danger"
-            onClick={() => { removeMessage(msgMenu.msg); setMsgMenu(null); }}
+        isTouchDevice ? (
+          /* На телефоне указателя нет, и маленькое меню у пальца попадает под
+             сам палец. Поэтому затемняем экран, поднимаем нажатое сообщение
+             над затемнением и показываем крупные кнопки снизу. */
+          <div className="msg-sheet-backdrop" onClick={() => setMsgMenu(null)}>
+            <div className="msg-sheet-preview" onClick={e => e.stopPropagation()}>
+              {msgMenu.msg.attachment?.kind === 'image' && (
+                <img src={mediaUrl(msgMenu.msg.attachment.url)} alt="" />
+              )}
+              {msgMenu.msg.text && <span>{msgMenu.msg.text}</span>}
+            </div>
+            <div className="msg-sheet" onClick={e => e.stopPropagation()}>
+              {msgMenu.msg.text && (
+                <button onClick={() => { startEdit(msgMenu.msg); setMsgMenu(null); }}>Изменить</button>
+              )}
+              <button className="msg-menu-danger" onClick={() => { removeMessage(msgMenu.msg); setMsgMenu(null); }}>
+                Удалить
+              </button>
+            </div>
+            <button className="msg-sheet-cancel" onClick={() => setMsgMenu(null)}>Отмена</button>
+          </div>
+        ) : (
+          <div
+            className="msg-menu"
+            style={{
+              left: Math.min(msgMenu.x, window.innerWidth - 190),
+              top: Math.min(msgMenu.y, window.innerHeight - 130),
+            }}
+            onPointerDown={e => e.stopPropagation()}
           >
-            Удалить
-          </button>
-        </div>
+            {msgMenu.msg.text && (
+              <button onClick={() => { startEdit(msgMenu.msg); setMsgMenu(null); }}>Изменить</button>
+            )}
+            <button className="msg-menu-danger" onClick={() => { removeMessage(msgMenu.msg); setMsgMenu(null); }}>
+              Удалить
+            </button>
+          </div>
+        )
       )}
 
       {/* Всплывающие сообщения чата: три секунды поверх всего, потом гаснут.
@@ -4646,6 +4678,7 @@ export default function App() {
                     onPointerDown={isOwn && msg.id ? (e) => startLongPress(e, msg) : undefined}
                     onPointerUp={cancelLongPress}
                     onPointerLeave={cancelLongPress}
+                    onPointerMove={maybeCancelOnMove}
                   >
                     {startsGroup && !isOwn && <div className="msg-author">{msg.userName}</div>}
                     <div className="msg-bubble">

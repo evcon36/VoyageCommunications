@@ -278,9 +278,17 @@ router.post('/token', authMiddleware, async (req, res) => {
     const apiSecret = process.env.LIVEKIT_API_SECRET;
     if (!apiKey || !apiSecret) return res.status(500).json({ message: 'LiveKit не настроен' });
 
-    const suffix = crypto.randomBytes(2).toString('hex');
+    // Личность постоянна и совпадает с ником. Раньше к ней добавлялся
+    // случайный хвост, и каждое подключение считалось новым человеком: после
+    // обрыва прежняя сессия висела до истечения таймаута, и один и тот же
+    // участник показывался в комнате дважды и трижды.
+    //
+    // С постоянной личностью медиасервер сам закрывает прежнюю сессию, когда
+    // тот же человек заходит снова. Побочное следствие: с двух устройств под
+    // одним аккаунтом одновременно не войти, останется последнее. Для звонка
+    // это правильное поведение.
     const at = new AccessToken(apiKey, apiSecret, {
-      identity: `${req.user.username}#${suffix}`,
+      identity: req.user.username,
       name: req.user.username,
       ttl: '4h',
     });
@@ -406,10 +414,13 @@ router.post('/guest-token', async (req, res) => {
     const clean = String(name || '').trim().slice(0, 32);
     const displayName = clean || await nextGuestName(roomId);
 
-    const suffix = crypto.randomBytes(2).toString('hex');
+    // У гостя постоянная часть это его собственный номер устройства: он и
+    // отличает одного гостя от другого, и остаётся тем же при переподключении
+    const stable = String(guestId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40)
+      || crypto.randomBytes(4).toString('hex');
     const at = new AccessToken(apiKey, apiSecret, {
       // префикс guest# — по нему сервер и клиент отличают гостя от аккаунта
-      identity: `guest#${suffix}`,
+      identity: `guest#${stable}`,
       name: displayName,
       ttl: '4h',
     });
