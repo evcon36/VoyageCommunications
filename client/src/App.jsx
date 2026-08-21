@@ -653,6 +653,9 @@ export default function App() {
   const [accountTab, setAccountTab] = useState('profile');
   const [isChatOpen, setIsChatOpen] = useState(false);
   const chatOpenRef = useRef(false);   // обработчик сокета не видит свежее состояние
+  // По той же причине: обработчик ставится один раз, а настройка меняется
+  const chatPopupsRef = useRef(true);
+  const myIdRef = useRef(null);
   const [isScreenFullscreen, setIsScreenFullscreen] = useState(false);
 
   const [callHistory, setCallHistory] = useState([]);
@@ -687,6 +690,11 @@ export default function App() {
   const [applauseVolume, setApplauseVolume] = useState(() => Number(localStorage.getItem('vol_applause') ?? 80));
   const [usersVolume, setUsersVolume] = useState(() => Number(localStorage.getItem('vol_users') ?? 100));
   const [autoEnableCamera, setAutoEnableCamera] = useState(() => localStorage.getItem('autoCamera') !== 'false');
+  // Всплывающие сообщения чата. По умолчанию включены: чат в звонке обычно
+  // закрыт, и без всплытия сообщение замечают уже после разговора. Отключить
+  // можно в настройках: кому-то это мешает во время показа экрана.
+  const [chatPopups, setChatPopups] = useState(() => localStorage.getItem('chatPopups') !== 'false');
+  const [chatToasts, setChatToasts] = useState([]);
   const [mutedUsers, setMutedUsers] = useState(() => new Set());
 
   // Sounds panel
@@ -1928,6 +1936,18 @@ export default function App() {
       // Значок на кнопке чата показывал общее число сообщений и никогда не
       // гас: считаем именно непрочитанные, пока панель закрыта.
       if (!chatOpenRef.current) setChatUnread(n => n + 1);
+
+      // Всплывающее сообщение внизу экрана. Показываем, только когда чат
+      // закрыт: при открытом человек и так его видит, и всплытие дублировало
+      // бы одно и то же. Свои сообщения не всплывают: их автор только что
+      // отправил.
+      if (!chatPopupsRef.current || chatOpenRef.current) return;
+      if (message.userId && message.userId === myIdRef.current) return;
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      setChatToasts(prev => [...prev.slice(-2), { ...message, id }]);
+      // Три секунды на прочтение, потом плавно гаснет. Больше двух подряд не
+      // копим: иначе при оживлённой переписке экран заливает целиком.
+      setTimeout(() => setChatToasts(prev => prev.filter(t => t.id !== id)), 3000);
     });
 
     socket.on('sound', ({ soundId, fromUser, toUser }) => {
@@ -2067,6 +2087,11 @@ export default function App() {
   useEffect(() => { localStorage.setItem('vol_applause', applauseVolume); }, [applauseVolume]);
   useEffect(() => { localStorage.setItem('vol_users', usersVolume); }, [usersVolume]);
   useEffect(() => { localStorage.setItem('autoCamera', autoEnableCamera); }, [autoEnableCamera]);
+  useEffect(() => {
+    localStorage.setItem('chatPopups', chatPopups);
+    chatPopupsRef.current = chatPopups;
+  }, [chatPopups]);
+  useEffect(() => { myIdRef.current = authUser?.id || guestIdRef.current; }, [authUser]);
 
   // Apply applause/sound volumes
   useEffect(() => {
@@ -2980,13 +3005,71 @@ export default function App() {
   );
 
   // Find participant with active screen share
-  const screenSharePresenter = useMemo(() => {
-    return allParticipants.find(p => {
+  // Все, кто прямо сейчас показывает экран. Их может быть больше одного:
+  // раньше брался только первый, и второй показ было не посмотреть вовсе.
+  const screenShares = useMemo(() => {
+    return allParticipants.filter(p => {
       const pub = p.getTrackPublication(LK.Track.Source.ScreenShare);
       return pub?.track && (p === livekitRoomRef.current?.localParticipant || pub.isSubscribed) && !pub.isMuted;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allParticipants, renderTick]);
+
+  const screenSharePresenter = screenShares[0];
+
+  // ── Что показывать крупно ──
+  //
+  // Правила, чтобы поведение было предсказуемым:
+  //   1. Никто ничего не выбирал — крупно идёт показ экрана, если он есть.
+  //      Начал показывать — у всех большим стал его экран, как и ожидается.
+  //   2. Человек нажал на любую плитку — крупно становится она, и это
+  //      перебивает правило 1: можно смотреть на лицо говорящего, пока рядом
+  //      идёт показ.
+  //   3. Нажатие на крупную плитку снимает выбор и возвращает к правилу 1.
+  //   4. Выбранное пропало (человек вышел, показ выключили) — выбор
+  //      сбрасывается, иначе экран остался бы пустым.
+  //   5. Начался новый показ — выбор сбрасывается: новый показ важнее
+  //      прежнего выбора, иначе человек не заметит, что ему что-то показывают.
+  const [focus, setFocus] = useState(null);   // { identity, source } либо null
+
+  // Правило 5: новый показ возвращает всех к нему
+  const shareKey = screenShares.map(p => p.identity).join(',');
+  const prevShareKey = useRef(shareKey);
+  useEffect(() => {
+    if (shareKey && shareKey !== prevShareKey.current) setFocus(null);
+    prevShareKey.current = shareKey;
+  }, [shareKey]);
+
+  // Правило 4: выбранного больше нет
+  useEffect(() => {
+    if (!focus) return;
+    const p = allParticipants.find(x => x.identity === focus.identity);
+    const gone = !p || (focus.source === 'screen' && !screenShares.includes(p));
+    if (gone) setFocus(null);
+  }, [focus, allParticipants, screenShares]);
+
+  // Крупная плитка и лента под ней
+  const stage = useMemo(() => {
+    if (!screenShares.length) return null;   // обычная сетка, не наш случай
+    const byId = (id) => allParticipants.find(x => x.identity === id);
+    const chosen = focus && byId(focus.identity)
+      ? { participant: byId(focus.identity), source: focus.source }
+      : { participant: screenShares[0], source: 'screen' };
+
+    // В ленту идут все камеры плюс все показы экрана, кроме того, что наверху
+    const strip = [];
+    for (const p of screenShares) {
+      if (!(chosen.source === 'screen' && p === chosen.participant)) {
+        strip.push({ participant: p, source: 'screen' });
+      }
+    }
+    for (const p of allParticipants) {
+      if (!(chosen.source === 'camera' && p === chosen.participant)) {
+        strip.push({ participant: p, source: 'camera' });
+      }
+    }
+    return { big: chosen, strip };
+  }, [screenShares, allParticipants, focus]);
 
   // ── Геометрия своего окна ──
   // Размер и положение считаются здесь, а не в CSS. Иначе свёрнутое окно
@@ -3318,6 +3401,19 @@ export default function App() {
               <Icon name="phoneOff" size={22} />
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Всплывающие сообщения чата: три секунды поверх всего, потом гаснут.
+          Стоят над панелью кнопок, чтобы не перекрывать микрофон и сброс. */}
+      {joined && chatToasts.length > 0 && (
+        <div className="chat-toasts" style={{ bottom: (controlsVisible ? controlsH + 30 : 16) }}>
+          {chatToasts.map(t => (
+            <div className="chat-toast" key={t.id}>
+              <span className="chat-toast-who">{t.userName}</span>
+              <span className="chat-toast-text">{t.text}</span>
+            </div>
+          ))}
         </div>
       )}
 
@@ -4468,6 +4564,7 @@ export default function App() {
               <div className="settings-row settings-row--toggle">
                 <label>Авто-включение камеры при входе</label>
                 <Switch checked={autoEnableCamera} onChange={setAutoEnableCamera} label="Авто-включение камеры" />
+                <Switch checked={chatPopups} onChange={setChatPopups} label="Показывать сообщения чата поверх звонка" />
               </div>
               <div className="settings-row settings-row--toggle">
                 <label>Размытие фона{blurBusy ? ' …' : ''}</label>
@@ -4722,12 +4819,36 @@ export default function App() {
 
           {/* Video area — full window; тап (телефон) показывает/прячет управление */}
           <div ref={stageRef} className={`video-stage${isScreenFullscreen ? ' video-stage--fs' : ''}${selfBig ? ' video-stage--selfbig' : ''}`} onClick={isTouchDevice ? onStageTap : undefined}>
-            {screenSharePresenter ? (
+            {stage ? (
               <div className="presenter-layout">
-                <ScreenShareTile
-                  participant={screenSharePresenter}
-                  isLocal={screenSharePresenter === livekitRoomRef.current?.localParticipant}
-                />
+                {/* Крупно идёт либо показ экрана, либо то, что человек выбрал
+                    сам. Нажатие по крупному снимает выбор и возвращает к
+                    показу: так из любого состояния есть путь назад. */}
+                <button
+                  className="stage-big"
+                  onClick={(e) => { e.stopPropagation(); setFocus(null); }}
+                  aria-label={focus ? 'Вернуться к показу экрана' : 'Показ экрана'}
+                  disabled={!focus}
+                >
+                  {stage.big.source === 'screen' ? (
+                    <ScreenShareTile
+                      participant={stage.big.participant}
+                      isLocal={stage.big.participant === livekitRoomRef.current?.localParticipant}
+                    />
+                  ) : (
+                    <ParticipantTile
+                      participant={stage.big.participant}
+                      isLocal={stage.big.participant === localP}
+                      isFrontCamera={isFrontCamera}
+                      onMeta={onTileMeta}
+                    />
+                  )}
+                  {focus && (
+                    <span className="stage-back-chip">
+                      <Icon name="close" size={13} /> Вернуться к показу
+                    </span>
+                  )}
+                </button>
                 <button
                   className="screen-fullscreen-btn"
                   title={isScreenFullscreen ? 'Свернуть' : 'На весь экран'}
@@ -4768,14 +4889,33 @@ export default function App() {
                        замера */
                     style={{ marginBottom: controlsVisible ? controlsH + 30 : 12 }}
                   >
-                    {allParticipants.map(p => (
-                      <ParticipantTile
-                        key={p.identity}
-                        participant={p}
-                        isLocal={p === livekitRoomRef.current?.localParticipant}
-                        isFrontCamera={isFrontCamera}
-                        small
-                      />
+                    {/* Нажатие по любой плитке в ленте поднимает её наверх:
+                        и камеру, и чужой показ экрана. */}
+                    {stage.strip.map(item => (
+                      <button
+                        key={`${item.source}:${item.participant.identity}`}
+                        className="strip-pick"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setFocus({ identity: item.participant.identity, source: item.source });
+                        }}
+                        aria-label={`Показать крупно: ${displayName(item.participant)}${item.source === 'screen' ? ', экран' : ''}`}
+                      >
+                        {item.source === 'screen' ? (
+                          <ScreenShareTile
+                            participant={item.participant}
+                            isLocal={item.participant === livekitRoomRef.current?.localParticipant}
+                          />
+                        ) : (
+                          <ParticipantTile
+                            participant={item.participant}
+                            isLocal={item.participant === livekitRoomRef.current?.localParticipant}
+                            isFrontCamera={isFrontCamera}
+                            small
+                          />
+                        )}
+                        {item.source === 'screen' && <span className="strip-badge">экран</span>}
+                      </button>
                     ))}
                   </div>
                 )}
