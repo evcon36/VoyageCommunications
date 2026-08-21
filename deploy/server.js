@@ -316,10 +316,32 @@ io.on('connection', (socket) => {
   socket.on('answer', ({ roomId, answer }) => socket.to(roomId).emit('answer', answer));
   socket.on('ice-candidate', ({ roomId, candidate }) => socket.to(roomId).emit('ice-candidate', candidate));
 
-  socket.on('chat-message', ({ roomId, userName, text, timestamp }) => {
+  socket.on('chat-message', ({ roomId, userName, text, timestamp, attachment }) => {
     if (!inRoom(roomId)) return;
+
+    // Вложение пропускаем только если ссылка ведёт в нашу папку загрузок для
+    // этой же комнаты. Иначе через чат можно было бы разослать всем ссылку
+    // куда угодно, а выглядела бы она как файл, отправленный собеседником.
+    let safe;
+    if (attachment && typeof attachment.url === 'string') {
+      const expected = `/uploads/chat/${String(roomId).replace(/[^a-zA-Z0-9_-]/g, '')}/`;
+      if (attachment.url.startsWith(expected) && !attachment.url.includes('..')) {
+        safe = {
+          url: attachment.url,
+          name: String(attachment.name || 'файл').slice(0, 120),
+          size: Number(attachment.size) || 0,
+          kind: attachment.kind === 'image' ? 'image' : 'file',
+        };
+      }
+    }
+
     // имя берём то, под которым человек реально вошёл в комнату
-    io.to(roomId).emit('chat-message', { userName: socket.data.userName || userName, text, timestamp });
+    io.to(roomId).emit('chat-message', {
+      userName: socket.data.userName || userName,
+      text,
+      timestamp,
+      attachment: safe,
+    });
   });
 
   socket.on('sound', ({ roomId, soundId, fromUser, toUser }) => {
@@ -390,6 +412,8 @@ app.use('/contacts', contactsRoutes);
 // служебные вызовы с этой же машины (очистка данных удалённых аккаунтов);
 // nginx этот путь наружу не проксирует
 app.use('/internal', internalRoutes);
+// Вложения в чат звонка: картинки и файлы до 15 МБ
+app.use('/chat', require('./src/routes/chat.routes'));
 app.get('/', (_, res) => res.send('Backend is running'));
 
 const PORT = process.env.PORT || 3001;

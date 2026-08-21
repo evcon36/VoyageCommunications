@@ -2782,16 +2782,69 @@ export default function App() {
     }
   };
 
+  // ── Вложения ──
+  // Файл уходит на сервер до отправки сообщения: так человек видит, что он
+  // дошёл, и может передумать. Пока идёт загрузка, вложение висит рядом с
+  // полем ввода, а не улетает вместе с текстом вслепую.
+  const [pending, setPending] = useState(null);   // { name, size, kind, url, progress }
+  const fileInputRef = useRef(null);
+  const MAX_UPLOAD = 15 * 1024 * 1024;
+
+  const uploadFile = async (file) => {
+    if (!file || !joined) return;
+    if (file.size > MAX_UPLOAD) {
+      setStatus('Файл больше 15 МБ');
+      return;
+    }
+    // Показываем сразу, ещё до ответа сервера: иначе после выбора файла
+    // несколько секунд ничего не происходит и кажется, что нажатие пропало
+    setPending({ name: file.name, size: file.size, kind: file.type.startsWith('image/') ? 'image' : 'file', url: null, progress: 0 });
+    try {
+      const room = encodeURIComponent(roomIdRef.current || '');
+      const name = encodeURIComponent(file.name || 'файл');
+      const resp = await apiFetch(`/chat/upload?room=${room}&name=${name}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: file,
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        setStatus(data.message || 'Не удалось отправить файл');
+        setPending(null);
+        return;
+      }
+      setPending({ ...data, progress: 100 });
+    } catch {
+      setStatus('Не удалось отправить файл. Проверьте интернет');
+      setPending(null);
+    }
+  };
+
+  // Картинку можно просто вставить из буфера, как в переписке: искать файл на
+  // диске ради снимка экрана неудобно
+  const handlePaste = (e) => {
+    const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
+    if (!item) return;
+    const file = item.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    uploadFile(file);
+  };
+
   const sendMessage = () => {
     const text = messageText.trim();
-    if (!text || !joined) return;
+    // Отправить можно и один файл без подписи, и подпись без файла, но не
+    // пустоту
+    if ((!text && !pending?.url) || !joined) return;
     socket.emit('chat-message', {
       roomId: roomIdRef.current,
       userName: userName.trim() || 'Участник',
       text,
+      attachment: pending?.url ? { url: pending.url, name: pending.name, size: pending.size, kind: pending.kind } : undefined,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     });
     setMessageText('');
+    setPending(null);
   };
 
   const handleMessageKeyDown = (e) => {
@@ -4492,23 +4545,81 @@ export default function App() {
                   >
                     {startsGroup && !isOwn && <div className="msg-author">{msg.userName}</div>}
                     <div className="msg-bubble">
-                      <span className="msg-text">{renderMessageText(msg.text)}</span>
+                      {/* Картинка идёт над текстом и служит ему заголовком:
+                          подпись читается после того, что подписывают.
+                          Прочие файлы показываем строкой со ссылкой. */}
+                      {msg.attachment?.kind === 'image' && (
+                        <a className="msg-image" href={mediaUrl(msg.attachment.url)} target="_blank" rel="noopener">
+                          <img src={mediaUrl(msg.attachment.url)} alt={msg.attachment.name || ''} loading="lazy" />
+                        </a>
+                      )}
+                      {msg.attachment && msg.attachment.kind !== 'image' && (
+                        <a className="msg-file" href={mediaUrl(msg.attachment.url)} target="_blank" rel="noopener" download={msg.attachment.name}>
+                          <Icon name="link" size={15} />
+                          <span className="msg-file-name">{msg.attachment.name}</span>
+                          <span className="msg-file-size">{((msg.attachment.size || 0) / 1024 / 1024).toFixed(1)} МБ</span>
+                        </a>
+                      )}
+                      {msg.text && <span className="msg-text">{renderMessageText(msg.text)}</span>}
                       <span className="msg-time">{msg.timestamp}</span>
                     </div>
                   </div>
                 );
               })}
           </div>
+          {/* Выбранное вложение висит над полем ввода до отправки: человек
+              видит, что файл дошёл, и может передумать */}
+          {pending && (
+            <div className="chat-pending">
+              {pending.kind === 'image' && pending.url
+                ? <img className="chat-pending-thumb" src={mediaUrl(pending.url)} alt="" />
+                : <span className="chat-pending-icon"><Icon name="link" size={16} /></span>}
+              <div className="chat-pending-info">
+                <div className="chat-pending-name">{pending.name}</div>
+                <div className="chat-pending-meta">
+                  {pending.url
+                    ? `${(pending.size / 1024 / 1024).toFixed(1)} МБ`
+                    : 'Загружаем…'}
+                </div>
+              </div>
+              {!pending.url && <span className="chat-pending-spinner" aria-hidden="true" />}
+              <button className="chat-pending-x" onClick={() => setPending(null)} aria-label="Убрать вложение">
+                <Icon name="close" size={14} />
+              </button>
+            </div>
+          )}
           <div className="chat-input-row">
+            <input
+              ref={fileInputRef}
+              type="file"
+              hidden
+              accept="image/png,image/jpeg,image/gif,image/webp,.pdf,.txt,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rtf,.md"
+              onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; uploadFile(f); }}
+            />
+            <button
+              className="attach-btn"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!joined || Boolean(pending)}
+              aria-label="Прикрепить файл"
+              title="Прикрепить файл, до 15 МБ"
+            >
+              <Icon name="link" size={20} />
+            </button>
             <input
               className="chat-input"
               value={messageText}
               onChange={e => setMessageText(e.target.value)}
               onKeyDown={handleMessageKeyDown}
+              onPaste={handlePaste}
               placeholder="Сообщение"
               disabled={!joined}
             />
-            <button className="send-btn" onClick={sendMessage} disabled={!joined || !messageText.trim()} aria-label="Отправить">
+            <button
+              className="send-btn"
+              onClick={sendMessage}
+              disabled={!joined || (!messageText.trim() && !pending?.url)}
+              aria-label="Отправить"
+            >
               <Icon name="send" size={20} />
             </button>
           </div>
