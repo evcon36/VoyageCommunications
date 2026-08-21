@@ -3568,3 +3568,53 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 .msg-file-size { flex: 0 0 auto; font-size: 12px; opacity: .65; }
 
 @media (prefers-reduced-motion: reduce) { .chat-pending-spinner { animation: none } }
+
+/* ── Правка и удаление своих сообщений ──
+   Кнопки появляются при наведении на компьютере и по долгому нажатию на
+   телефоне: постоянные значки в каждом пузыре засоряют переписку. */
+.msg-bubble { position: relative; }
+.msg-actions {
+  position: absolute;
+  top: -8px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity .15s ease;
+  pointer-events: none;
+}
+.msg-actions button {
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: var(--surface-3);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+@media (hover: hover) and (pointer: fine) {
+  .msg:hover .msg-actions { opacity: 1; pointer-events: auto; }
+}
+/* На сенсоре наведения нет: показываем всегда, но приглушённо, чтобы не
+   спорить с текстом */
+@media (pointer: coarse) {
+  .msg-actions { opacity: .45; pointer-events: auto; }
+  .msg-actions button { width: 30px; height: 30px; }
+}
+
+.msg-edit { display: flex; flex-direction: column; gap: 4px; }
+.msg-edit-input {
+  width: 100%;
+  min-width: 180px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+}
+.msg-edit-hint { font-size: 11px; opacity: .55; }
+/* Пометка о правке: собеседник должен видеть, что текст поменяли после
+   отправки, иначе переписку можно незаметно переписать задним числом */
+.msg-edited { margin-right: 6px; opacity: .7; font-style: italic; }

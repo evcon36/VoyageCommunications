@@ -40,6 +40,28 @@ const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS, methods: ['GET'
 
 const roomUsers = new Map();
 const admittedWaiters = new Map(); // roomId -> Set(userId|socketId)
+const crypto = require('crypto');
+const fsp = require('fs').promises;
+const nodePath = require('path');
+
+// Кто автор какого сообщения, по комнатам. Живёт в памяти, как и сам чат:
+// переписка нигде не хранится и исчезает вместе со звонком.
+const chatAuthors = new Map();
+
+const CHAT_UPLOAD_ROOT = '/var/www/voyage/uploads/chat';
+
+// Удаление вложения вместе с сообщением. Путь проверяем заново, хотя он и
+// наш: одна ошибка выше по коду не должна давать удаление чужих файлов.
+async function removeChatFile(url) {
+  try {
+    const rel = String(url || '').replace(/^\/uploads\/chat\//, '');
+    if (!rel || rel.includes('..')) return;
+    const full = nodePath.resolve(CHAT_UPLOAD_ROOT, rel);
+    if (!full.startsWith(CHAT_UPLOAD_ROOT + nodePath.sep)) return;
+    await fsp.unlink(full);
+  } catch { /* файла уже нет */ }
+}
+
 global.admittedWaiters = admittedWaiters;
 // Маршруты записи шлют предупреждение всем в комнате: сокет им нужен, а
 // импортировать сервер оттуда нельзя, получится круг
@@ -114,6 +136,9 @@ function removeUserFromRoom(roomId, socketId) {
   if (users.length > 0) roomUsers.set(roomId, users);
   else {
     roomUsers.delete(roomId);
+    // Комната опустела: авторство сообщений больше не нужно, иначе карта
+    // растёт весь срок жизни процесса
+    chatAuthors.delete(roomId);
     // Комната опустела — список впущенных больше не нужен. Без этой строки
     // он копился в памяти процесса до самого перезапуска сервера, и человек,
     // однажды впущенный в комнату, заходил в неё потом без спроса.
@@ -316,6 +341,15 @@ io.on('connection', (socket) => {
   socket.on('answer', ({ roomId, answer }) => socket.to(roomId).emit('answer', answer));
   socket.on('ice-candidate', ({ roomId, candidate }) => socket.to(roomId).emit('ice-candidate', candidate));
 
+  // Кто отправил какое сообщение. Сообщения нигде не хранятся, живут только у
+  // участников на экране, поэтому право на правку и удаление сервер помнит
+  // сам: без этого «своё» определял бы клиент, а значит правь что хочешь.
+  //
+  // Ключ автора это ник, если человек вошёл в аккаунт, иначе номер соединения.
+  // У гостя после обрыва номер сменится и он потеряет право на свои прежние
+  // сообщения: неприятно, но безопаснее, чем верить присланному имени.
+  const authorKey = () => socket.data.presenceUsername || `sock:${socket.id}`;
+
   socket.on('chat-message', ({ roomId, userName, text, timestamp, attachment }) => {
     if (!inRoom(roomId)) return;
 
@@ -335,13 +369,40 @@ io.on('connection', (socket) => {
       }
     }
 
+    const id = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+    if (!chatAuthors.has(roomId)) chatAuthors.set(roomId, new Map());
+    chatAuthors.get(roomId).set(id, { author: authorKey(), file: safe?.url || null });
+
     // имя берём то, под которым человек реально вошёл в комнату
     io.to(roomId).emit('chat-message', {
+      id,
       userName: socket.data.userName || userName,
       text,
       timestamp,
       attachment: safe,
     });
+  });
+
+  // ── Правка своего сообщения ──
+  socket.on('chat-edit', ({ roomId, id, text }) => {
+    if (!inRoom(roomId)) return;
+    const rec = chatAuthors.get(roomId)?.get(id);
+    if (!rec || rec.author !== authorKey()) return;   // чужое не трогаем
+    const clean = String(text || '').slice(0, 4000).trim();
+    if (!clean) return;   // пустая правка это удаление, для него своё событие
+    io.to(roomId).emit('chat-edited', { id, text: clean });
+  });
+
+  // ── Удаление своего сообщения ──
+  socket.on('chat-delete', ({ roomId, id }) => {
+    if (!inRoom(roomId)) return;
+    const rec = chatAuthors.get(roomId)?.get(id);
+    if (!rec || rec.author !== authorKey()) return;
+    chatAuthors.get(roomId).delete(id);
+    // Вложение удаляем с диска вместе с сообщением: иначе файл остаётся
+    // доступен по прямой ссылке, хотя человек его отозвал
+    if (rec.file) removeChatFile(rec.file);
+    io.to(roomId).emit('chat-deleted', { id });
   });
 
   socket.on('sound', ({ roomId, soundId, fromUser, toUser }) => {

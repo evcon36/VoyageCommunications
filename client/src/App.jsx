@@ -1950,6 +1950,16 @@ export default function App() {
       setTimeout(() => setChatToasts(prev => prev.filter(t => t.id !== id)), 3000);
     });
 
+    socket.on('chat-edited', ({ id, text }) => {
+      setMessages(prev => prev.map(m => (m.id === id ? { ...m, text, edited: true } : m)));
+      // Всплытие тоже правим: иначе на экране висит старый текст
+      setChatToasts(prev => prev.map(t => (t.id === id ? { ...t, text } : t)));
+    });
+    socket.on('chat-deleted', ({ id }) => {
+      setMessages(prev => prev.filter(m => m.id !== id));
+      setChatToasts(prev => prev.filter(t => t.id !== id));
+    });
+
     socket.on('sound', ({ soundId, fromUser, toUser }) => {
       const s = SOUNDS.find(x => x.id === soundId);
       const emoji = s?.emoji ?? '🔔';
@@ -2845,6 +2855,30 @@ export default function App() {
     });
     setMessageText('');
     setPending(null);
+  };
+
+  // ── Правка и удаление своих сообщений ──
+  // Право проверяет сервер: он помнит, кто что отправил. Здесь мы только
+  // решаем, кому показать кнопки, и это решение ни на что не влияет с точки
+  // зрения безопасности.
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState('');
+
+  const startEdit = (msg) => {
+    setEditingId(msg.id);
+    setEditText(msg.text || '');
+  };
+  const applyEdit = () => {
+    const text = editText.trim();
+    if (!text || !editingId) { setEditingId(null); return; }
+    socket.emit('chat-edit', { roomId: roomIdRef.current, id: editingId, text });
+    setEditingId(null);
+    setEditText('');
+  };
+  const removeMessage = (msg) => {
+    socket.emit('chat-delete', { roomId: roomIdRef.current, id: msg.id });
+    // Ждём подтверждения сервера, а не убираем сразу: если право не подтвердят,
+    // сообщение не должно исчезнуть только у автора и остаться у остальных
   };
 
   const handleMessageKeyDown = (e) => {
@@ -4545,6 +4579,22 @@ export default function App() {
                   >
                     {startsGroup && !isOwn && <div className="msg-author">{msg.userName}</div>}
                     <div className="msg-bubble">
+                      {/* Правка и удаление только на своих сообщениях. Кнопки
+                          появляются при наведении на компьютере и по долгому
+                          нажатию на телефоне: постоянные значки в каждом
+                          пузыре засоряют переписку. */}
+                      {isOwn && msg.id && editingId !== msg.id && (
+                        <div className="msg-actions">
+                          {msg.text && (
+                            <button onClick={() => startEdit(msg)} aria-label="Изменить">
+                              <Icon name="settings" size={13} />
+                            </button>
+                          )}
+                          <button onClick={() => removeMessage(msg)} aria-label="Удалить">
+                            <Icon name="close" size={13} />
+                          </button>
+                        </div>
+                      )}
                       {/* Картинка идёт над текстом и служит ему заголовком:
                           подпись читается после того, что подписывают.
                           Прочие файлы показываем строкой со ссылкой. */}
@@ -4560,8 +4610,27 @@ export default function App() {
                           <span className="msg-file-size">{((msg.attachment.size || 0) / 1024 / 1024).toFixed(1)} МБ</span>
                         </a>
                       )}
-                      {msg.text && <span className="msg-text">{renderMessageText(msg.text)}</span>}
-                      <span className="msg-time">{msg.timestamp}</span>
+                      {editingId === msg.id ? (
+                        <div className="msg-edit">
+                          <input
+                            className="msg-edit-input"
+                            value={editText}
+                            autoFocus
+                            onChange={e => setEditText(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') { e.preventDefault(); applyEdit(); }
+                              if (e.key === 'Escape') { setEditingId(null); }
+                            }}
+                          />
+                          <div className="msg-edit-hint">Enter сохранит, Esc отменит</div>
+                        </div>
+                      ) : (
+                        msg.text && <span className="msg-text">{renderMessageText(msg.text)}</span>
+                      )}
+                      <span className="msg-time">
+                        {msg.edited && <span className="msg-edited">изменено</span>}
+                        {msg.timestamp}
+                      </span>
                     </div>
                   </div>
                 );
