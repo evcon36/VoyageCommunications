@@ -2864,6 +2864,47 @@ export default function App() {
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState('');
 
+  // ── Меню сообщения ──
+  // Кнопки поверх пузыря наезжали на текст и мешали читать. Действия
+  // спрятаны в меню: правой кнопкой на компьютере, долгим нажатием на
+  // телефоне. Ровно так это работает в любой переписке, и объяснять не надо.
+  const [msgMenu, setMsgMenu] = useState(null);   // { msg, x, y }
+  const longPressRef = useRef(null);
+
+  const openMsgMenu = (e, msg) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMsgMenu({ msg, x: e.clientX, y: e.clientY });
+  };
+  const startLongPress = (e, msg) => {
+    if (e.pointerType === 'mouse') return;   // мышь открывает правой кнопкой
+    const { clientX: x, clientY: y } = e;
+    longPressRef.current = setTimeout(() => {
+      // Лёгкий отклик: на телефоне без него непонятно, что нажатие засчитано
+      try { navigator.vibrate?.(12); } catch { /* не везде есть */ }
+      setMsgMenu({ msg, x, y });
+    }, 450);
+  };
+  const cancelLongPress = () => {
+    clearTimeout(longPressRef.current);
+    longPressRef.current = null;
+  };
+
+  // Меню закрывается по любому действию снаружи и по прокрутке: висящее
+  // меню поверх уехавшего сообщения выглядит поломкой
+  useEffect(() => {
+    if (!msgMenu) return;
+    const close = () => setMsgMenu(null);
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('pointerdown', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [msgMenu]);
+
   const startEdit = (msg) => {
     setEditingId(msg.id);
     setEditText(msg.text || '');
@@ -3488,6 +3529,31 @@ export default function App() {
               <Icon name="phoneOff" size={22} />
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Меню сообщения: правой кнопкой или долгим нажатием. Появляется у
+          пальца, но не вылезает за край экрана. */}
+      {msgMenu && (
+        <div
+          className="msg-menu"
+          style={{
+            left: Math.min(msgMenu.x, window.innerWidth - 190),
+            top: Math.min(msgMenu.y, window.innerHeight - 130),
+          }}
+          onPointerDown={e => e.stopPropagation()}
+        >
+          {msgMenu.msg.text && (
+            <button onClick={() => { startEdit(msgMenu.msg); setMsgMenu(null); }}>
+              Изменить
+            </button>
+          )}
+          <button
+            className="msg-menu-danger"
+            onClick={() => { removeMessage(msgMenu.msg); setMsgMenu(null); }}
+          >
+            Удалить
+          </button>
         </div>
       )}
 
@@ -4576,25 +4642,13 @@ export default function App() {
                   <div
                     key={`${msg.timestamp}-${i}`}
                     className={`msg${isOwn ? ' msg--own' : ''}${startsGroup ? ' msg--start' : ''}`}
+                    onContextMenu={isOwn && msg.id ? (e) => openMsgMenu(e, msg) : undefined}
+                    onPointerDown={isOwn && msg.id ? (e) => startLongPress(e, msg) : undefined}
+                    onPointerUp={cancelLongPress}
+                    onPointerLeave={cancelLongPress}
                   >
                     {startsGroup && !isOwn && <div className="msg-author">{msg.userName}</div>}
                     <div className="msg-bubble">
-                      {/* Правка и удаление только на своих сообщениях. Кнопки
-                          появляются при наведении на компьютере и по долгому
-                          нажатию на телефоне: постоянные значки в каждом
-                          пузыре засоряют переписку. */}
-                      {isOwn && msg.id && editingId !== msg.id && (
-                        <div className="msg-actions">
-                          {msg.text && (
-                            <button onClick={() => startEdit(msg)} aria-label="Изменить">
-                              <Icon name="settings" size={13} />
-                            </button>
-                          )}
-                          <button onClick={() => removeMessage(msg)} aria-label="Удалить">
-                            <Icon name="close" size={13} />
-                          </button>
-                        </div>
-                      )}
                       {/* Картинка идёт над текстом и служит ему заголовком:
                           подпись читается после того, что подписывают.
                           Прочие файлы показываем строкой со ссылкой. */}

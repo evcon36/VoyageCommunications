@@ -3416,7 +3416,11 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   cursor: default;
 }
 .stage-big:not(:disabled) { cursor: pointer; }
-.stage-big > * { width: 100%; height: 100%; }
+/* Растягиваем только само видео. Раньше правило било по всем дочерним, и
+   подсказка «Вернуться к показу» получала стопроцентный размер со
+   скруглением в 999 пикселей: на весь экран разворачивался гигантский овал
+   поверх картинки. */
+.stage-big > *:not(.stage-back-chip) { width: 100%; height: 100%; }
 
 /* Подсказка появляется, только когда выбор сделан: иначе она обещала бы
    возврат туда, где человек и так находится */
@@ -3569,39 +3573,6 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 
 @media (prefers-reduced-motion: reduce) { .chat-pending-spinner { animation: none } }
 
-/* ── Правка и удаление своих сообщений ──
-   Кнопки появляются при наведении на компьютере и по долгому нажатию на
-   телефоне: постоянные значки в каждом пузыре засоряют переписку. */
-.msg-bubble { position: relative; }
-.msg-actions {
-  position: absolute;
-  top: -8px;
-  right: 6px;
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity .15s ease;
-  pointer-events: none;
-}
-.msg-actions button {
-  width: 26px; height: 26px;
-  display: flex; align-items: center; justify-content: center;
-  border: none;
-  border-radius: 8px;
-  background: var(--surface-3);
-  color: var(--text-dim);
-  cursor: pointer;
-}
-@media (hover: hover) and (pointer: fine) {
-  .msg:hover .msg-actions { opacity: 1; pointer-events: auto; }
-}
-/* На сенсоре наведения нет: показываем всегда, но приглушённо, чтобы не
-   спорить с текстом */
-@media (pointer: coarse) {
-  .msg-actions { opacity: .45; pointer-events: auto; }
-  .msg-actions button { width: 30px; height: 30px; }
-}
-
 .msg-edit { display: flex; flex-direction: column; gap: 4px; }
 .msg-edit-input {
   width: 100%;
@@ -3618,3 +3589,53 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 /* Пометка о правке: собеседник должен видеть, что текст поменяли после
    отправки, иначе переписку можно незаметно переписать задним числом */
 .msg-edited { margin-right: 6px; opacity: .7; font-style: italic; }
+
+/* ── Меню сообщения ──
+   Кнопки поверх пузыря наезжали на текст. Действия спрятаны в меню, которое
+   открывается правой кнопкой на компьютере и долгим нажатием на телефоне.
+   Вид как у системных меню: плотный тёмный слой, крупные строки, разделитель
+   волосяной толщины, опасное действие красным. */
+.msg-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 180px;
+  padding: 6px;
+  border-radius: 14px;
+  background: rgba(28,31,39,.92);
+  backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: 0 18px 48px rgba(0,0,0,.5);
+  display: flex;
+  flex-direction: column;
+  animation: msg-menu-in .16s cubic-bezier(.32,.72,0,1);
+  transform-origin: top left;
+}
+.msg-menu button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 16px;
+  padding: 11px 12px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.msg-menu button + button { position: relative; }
+.msg-menu button + button::before {
+  content: "";
+  position: absolute;
+  left: 12px; right: 12px; top: 0;
+  height: 1px;
+  background: rgba(255,255,255,.09);
+}
+@media (hover: hover) and (pointer: fine) {
+  .msg-menu button:hover { background: rgba(255,255,255,.08); }
+}
+.msg-menu button:active { background: rgba(255,255,255,.12); }
+.msg-menu-danger { color: #ff6b6b; }
+@keyframes msg-menu-in { from { opacity: 0; transform: scale(.94) } to { opacity: 1; transform: none } }
+@media (prefers-reduced-motion: reduce) { .msg-menu { animation: none } }
+
+/* Долгое нажатие не должно выделять текст сообщения */
+.msg { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.msg-edit-input { -webkit-user-select: text; user-select: text; }
