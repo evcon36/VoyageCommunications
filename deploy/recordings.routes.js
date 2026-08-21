@@ -72,24 +72,24 @@ router.post('/start', authMiddleware, async (req, res) => {
       }
     }
 
-    // Записывать можно только разговор между людьми с аккаунтами. Голос и лицо
-    // это биометрия: человек без аккаунта ничего не подписывал и о записи
-    // договориться с ним негде. Плашка «идёт запись» такой договорённостью не
-    // является, поэтому при госте в комнате запись недоступна никому.
+    // Раньше запись блокировалась, если в комнате был хоть один человек без
+    // аккаунта. На важном разговоре это стоило владельцу всей записи: он
+    // позвал людей по ссылке, а записать уже не смог.
+    //
+    // Теперь записывает любой участник с аккаунтом. Взамен всем участникам
+    // уходит явное предупреждение с именем того, кто включил запись, и до
+    // остановки висит несмахиваемая метка: договорённость строится на том,
+    // что человек знает и может выйти, а не на том, что мы ему запретили.
+    let guestsPresent = [];
     try {
       const parts = await roomSvc.listParticipants(roomId);
-      const guest = (parts || []).find(p => String(p.identity || '').startsWith('guest#'));
-      if (guest) {
-        return res.status(403).json({
-          message: 'В комнате есть участник без аккаунта. Запись доступна, когда все вошли в свои аккаунты',
-          reason: 'guest-present',
-          guestName: guest.name || null,
-        });
-      }
+      guestsPresent = (parts || [])
+        .filter(p => String(p.identity || '').startsWith('guest#'))
+        .map(p => p.name || 'Гость');
     } catch (e) {
-      // состав комнаты неизвестен — значит поручиться, что гостей нет, нельзя
-      console.error('REC GUEST CHECK ERROR:', e.message);
-      return res.status(503).json({ message: 'Не удалось проверить состав комнаты. Попробуйте ещё раз' });
+      // Состав комнаты неизвестен: раньше это было поводом отказать целиком.
+      // Запись важнее точного списка, поэтому просто пишем в журнал.
+      console.error('REC GUEST CHECK:', e.message);
     }
 
     const fileName = `rec-${roomId}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.mp4`;
@@ -104,6 +104,16 @@ router.post('/start', authMiddleware, async (req, res) => {
       data: { egressId: info.egressId, roomId, startedBy: req.user.username, fileName },
     });
     recTimeline.startRec(roomId, rec.id);
+
+    // Явное предупреждение всем в комнате: кто включил и есть ли среди
+    // участников люди без аккаунта. Гость ничего не подписывал, поэтому он
+    // как минимум должен знать и успеть выйти.
+    try {
+      global.io?.to(roomId).emit('recording-warning', {
+        by: req.user.username,
+        guests: guestsPresent,
+      });
+    } catch (e) { console.error('REC WARN:', e.message); }
 
     // Chrome в egress иногда не стартует (слабый CPU) — проверяем через 5с,
     // что запись реально пошла, иначе честно сообщаем об ошибке

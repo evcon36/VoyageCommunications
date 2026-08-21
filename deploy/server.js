@@ -41,6 +41,9 @@ const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS, methods: ['GET'
 const roomUsers = new Map();
 const admittedWaiters = new Map(); // roomId -> Set(userId|socketId)
 global.admittedWaiters = admittedWaiters;
+// Маршруты записи шлют предупреждение всем в комнате: сокет им нужен, а
+// импортировать сервер оттуда нельзя, получится круг
+global.io = io;
 
 // Кто сейчас на сайте: username -> Set<socketId> (для входящих звонков)
 const onlineUsers = new Map();

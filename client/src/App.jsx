@@ -2106,12 +2106,28 @@ export default function App() {
   }, [callSeconds]);
 
   // Participants derived from LiveKit room
+  // Пока связь восстанавливается, медиасервер временно очищает список
+  // участников. Интерфейс честно показывал «вы один в комнате», хотя никто
+  // никуда не ушёл: люди на важном звонке решали, что всех отключило.
+  // Держим последний известный состав и показываем его, пока идёт
+  // восстановление.
+  const [reconnecting, setReconnecting] = useState(false);
+  const reconnectingRef = useRef(false);
+  const lastRosterRef = useRef([]);
+
   const allParticipants = useMemo(() => {
     const room = livekitRoomRef.current;
     if (!room || !joined) return [];
-    return [room.localParticipant, ...Array.from(room.remoteParticipants.values())];
+    const live = [room.localParticipant, ...Array.from(room.remoteParticipants.values())];
+    // Во время восстановления пустой список это не «все ушли», а «мы пока не
+    // знаем». Показываем прежний состав: он почти наверняка вернётся целиком.
+    if (reconnecting && live.length <= 1 && lastRosterRef.current.length > 1) {
+      return lastRosterRef.current;
+    }
+    if (live.length > 1) lastRosterRef.current = live;
+    return live;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [joined, renderTick]);
+  }, [joined, renderTick, reconnecting]);
 
   const joinRoom = () => joinRoomWith(roomId.trim(), inviteKeyRef.current);
 
@@ -2287,11 +2303,22 @@ export default function App() {
         videoCaptureDefaults: {
           resolution: { width: 640, height: 360, frameRate: 15 },
         },
-        // чистый звук: эхо/шумоподавление + авто-громкость (важно и для речи, и для транскрибации)
+        // Чистый звук: эхо, шумоподавление, ровная громкость.
+        //
+        // Собеседники жаловались, что слышат громкий стук по клавиатуре.
+        // Причина в том, что обычное шумоподавление рассчитано на ровный фон
+        // вроде кулера, а щелчок клавиши это короткий резкий звук, который оно
+        // пропускает. Хуже того, авто-громкость в паузах между словами
+        // поднимает усиление и делает этот стук ещё громче.
+        //
+        // voiceIsolation это отдельный режим: система оставляет голос и
+        // убирает всё остальное, включая клавиатуру и посуду. Работает не
+        // везде, поэтому это дополнение к обычному подавлению, а не замена.
         audioCaptureDefaults: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          voiceIsolation: true,
           channelCount: 1,
           sampleRate: 48000,
         },
@@ -2303,6 +2330,12 @@ export default function App() {
           // декодеров на телефоне и, как следствие, нагрев и разряд.
           simulcast: true,
           videoEncoding: { maxBitrate: 400_000, maxFramerate: 15 },
+          // Молчание не передаём вовсе: меньше трафика и, главное, в паузах
+          // до собеседников не долетает фоновый шум комнаты
+          dtx: true,
+          // Защита от потерь пакетов: на неровной сети речь рассыпается
+          // раньше картинки, и это раздражает сильнее подтормаживающего видео
+          red: true,
           videoSimulcastLayers: [
             { width: 320, height: 180, encoding: { maxBitrate: 120_000, maxFramerate: 12 } },
           ],
@@ -2356,8 +2389,19 @@ export default function App() {
         forceUpdate();
       });
       // Пока LiveKit сам восстанавливает связь, картинка замирала молча
-      room.on(LK.RoomEvent.Reconnecting, () => setStatus('Восстанавливаем связь...'));
-      room.on(LK.RoomEvent.Reconnected, () => setStatus('Связь восстановлена'));
+      room.on(LK.RoomEvent.Reconnecting, () => {
+        reconnectingRef.current = true;
+        setReconnecting(true);
+        setStatus('Восстанавливаем связь…');
+      });
+      room.on(LK.RoomEvent.Reconnected, () => {
+        reconnectingRef.current = false;
+        setReconnecting(false);
+        setStatus('Связь восстановлена');
+        // После восстановления состав мог измениться по-настоящему:
+        // перечитываем его заново, а не полагаемся на сохранённый
+        forceUpdate();
+      });
 
       room.on(LK.RoomEvent.ParticipantConnected, (p) => {
         setStatus(`${displayName(p)} подключился`);
@@ -2366,13 +2410,20 @@ export default function App() {
       });
 
       room.on(LK.RoomEvent.ParticipantDisconnected, (p) => {
-        setStatus(`${displayName(p)} отключился`);
-        playChime(false);
+        // Во время восстановления это не уход, а временная потеря списка:
+        // сообщать и звенеть про каждого незачем
+        if (!reconnectingRef.current) {
+          setStatus(`${displayName(p)} отключился`);
+          playChime(false);
+        }
         forceUpdate();
         // Звонок один на один: собеседник ушёл — разговаривать больше не с кем,
         // держать человека в пустой комнате незачем. В комнате по ссылке
         // остаёмся: туда люди заходят и выходят по ходу встречи.
-        if (directCallRef.current && room.remoteParticipants.size === 0) {
+        // Во время восстановления связи медиасервер сообщает об отключении
+        // всех участников, хотя никто не уходил. Раньше это завершало звонок
+        // один на один: человек терял разговор из-за секундного провала сети.
+        if (directCallRef.current && room.remoteParticipants.size === 0 && !reconnectingRef.current) {
           setCallNotice(`${displayName(p)} завершил звонок`);
           leaveCallRef.current?.();
         }
@@ -4582,7 +4633,7 @@ export default function App() {
       {/* ── In-call fullscreen layout ── */}
       {joined && (
         <div
-          className={`call-fullscreen${controlsVisible ? '' : ' controls-hidden'}`}
+          className={`call-fullscreen${controlsVisible ? '' : ' controls-hidden'}${reconnecting ? ' call-fullscreen--reconnecting' : ''}`}
           onMouseMove={isTouchDevice ? undefined : onDesktopMouseMove}
         >
           {/* Top bar (overlay, авто-скрытие) */}
@@ -4590,6 +4641,12 @@ export default function App() {
             <div className="call-topbar-left">
               <div className="brand" style={{ fontSize: 18 }}>COMS</div>
               <div className="call-room-badge">{roomId}</div>
+              {/* Пока связь восстанавливается, человек должен видеть, что дело
+                  в сети, а не в том, что все ушли. Без этого он гадает,
+                  продолжать говорить или перезванивать. */}
+              {reconnecting && (
+                <div className="reconnect-chip">Связь пропала, восстанавливаем…</div>
+              )}
               {/* Оставшееся время видно всегда: обрыв на сороковой минуте без
                   предупреждения человек воспринимает как поломку */}
               {guestLeftMs != null && guestLeftMs > 0 && (

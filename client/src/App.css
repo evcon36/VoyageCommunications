@@ -3381,3 +3381,21 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 .rec-line-time { color: var(--text-dim); font-size: 13px; font-variant-numeric: tabular-nums; padding-top: 2px; }
 .rec-line-who { font-weight: 590; color: var(--accent-text); font-size: 13px; }
 .rec-line-text { grid-column: 2; color: var(--text); }
+
+/* ── Восстановление связи ──
+   Раньше при провале сети список участников очищался, и человек видел пустую
+   комнату без объяснений. Плашка говорит, что происходит, а плитки в это
+   время приглушаются: видно, что картинка застыла не сама по себе. */
+.reconnect-chip {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(240,217,160,.18);
+  color: #f0d9a0;
+  font-size: 13px;
+  white-space: nowrap;
+  animation: reconnect-pulse 1.6s ease-in-out infinite;
+}
+@keyframes reconnect-pulse { 0%, 100% { opacity: .75 } 50% { opacity: 1 } }
+.call-fullscreen--reconnecting .tile-rows,
+.call-fullscreen--reconnecting .speaker-layout { opacity: .55; transition: opacity .25s ease; }
+@media (prefers-reduced-motion: reduce) { .reconnect-chip { animation: none; } }
