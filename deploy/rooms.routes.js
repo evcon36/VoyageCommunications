@@ -26,7 +26,16 @@ function iceServers(tag) {
   const username = `${Math.floor(Date.now() / 1000) + TURN_TTL}:${tag || 'voyage'}`;
   const credential = crypto.createHmac('sha1', TURN_SECRET).update(username).digest('base64');
   list.push({
-    urls: [`turn:${TURN_HOST}:3478`, `turns:${TURN_HOST}:5349`],
+    urls: [
+      `turn:${TURN_HOST}:3478`,
+      // Явный путь по TCP. На мобильной сети UDP рвётся первым при потерях, и
+      // в логах это два десятка разрывов медиасоединения: связь была, потом
+      // пропадала на секунды. Без этой строки клиент пробовал только UDP и
+      // защищённый порт, а простого TCP у него в списке не было.
+      `turn:${TURN_HOST}:3478?transport=tcp`,
+      `turns:${TURN_HOST}:5349`,
+      `turns:${TURN_HOST}:5349?transport=tcp`,
+    ],
     username,
     credential,
   });
