@@ -3210,12 +3210,15 @@ export default function App() {
       }
     }
     for (const p of allParticipants) {
-      if (!(chosen.source === 'camera' && p === chosen.participant)) {
-        strip.push({ participant: p, source: 'camera' });
-      }
+      if (chosen.source === 'camera' && p === chosen.participant) continue;
+      // Своя камера уже висит плавающим окном поверх показа. В ленте она
+      // давала второго себя на одном экране: человек видел себя дважды и не
+      // понимал, который настоящий.
+      if (!selfInGrid && p === localP) continue;
+      strip.push({ participant: p, source: 'camera' });
     }
     return { big: chosen, strip };
-  }, [screenShares, allParticipants, focus]);
+  }, [screenShares, allParticipants, focus, selfInGrid, localP]);
 
   // ── Геометрия своего окна ──
   // Размер и положение считаются здесь, а не в CSS. Иначе свёрнутое окно
@@ -5125,30 +5128,30 @@ export default function App() {
                   title={isScreenFullscreen ? 'Свернуть' : 'На весь экран'}
                   onClick={() => setIsScreenFullscreen(v => !v)}
                 >
-                  {isScreenFullscreen ? '↙ Свернуть' : '↗ На весь экран'}
+                  <Icon name={isScreenFullscreen ? 'collapse' : 'expand'} size={18} />
                 </button>
 
+                {/* Те же круглые кнопки, что и в обычной панели звонка.
+                    Раньше здесь был отдельный набор со своими формами,
+                    подписями и цветами: он выглядел из другого приложения,
+                    а иконки вообще рисовались системным синим, потому что
+                    кнопка не задавала цвет текста. */}
                 {isScreenFullscreen && (
                   <div className="fs-controls">
-                    <button className={`fs-btn ${isMuted ? 'fs-btn--off' : ''}`} onClick={toggleMute}>
-                      <span className="fs-btn-icon"><Icon name={isMuted ? 'micOff' : 'mic'} size={18} /></span>
-                      <span className="fs-btn-label">{isMuted ? 'Вкл' : 'Выкл'}</span>
+                    <button className={`ctrl-round ${isMuted ? 'ctrl-round--off' : ''}`} onClick={toggleMute} title={isMuted ? 'Включить микрофон' : 'Выключить микрофон'} aria-label={isMuted ? 'Включить микрофон' : 'Выключить микрофон'}>
+                      <Icon name={isMuted ? 'micOff' : 'mic'} size={22} />
                     </button>
-                    <button className={`fs-btn ${isCameraOff ? 'fs-btn--off' : ''}`} onClick={toggleCamera}>
-                      <span className="fs-btn-icon"><Icon name={isCameraOff ? 'cameraOff' : 'camera'} size={18} /></span>
-                      <span className="fs-btn-label">{isCameraOff ? 'Вкл' : 'Выкл'}</span>
+                    <button className={`ctrl-round ${isCameraOff ? 'ctrl-round--off' : ''}`} onClick={toggleCamera} title={isCameraOff ? 'Включить камеру' : 'Выключить камеру'} aria-label={isCameraOff ? 'Включить камеру' : 'Выключить камеру'}>
+                      <Icon name={isCameraOff ? 'cameraOff' : 'camera'} size={22} />
                     </button>
-                    <button className="fs-btn fs-btn--applause" onClick={() => setIsSoundsPanelOpen(p => !p)}>
-                      <span className="fs-btn-icon"><Icon name="music" size={18} /></span>
-                      <span className="fs-btn-label">Звуки</span>
+                    <button className="ctrl-round" onClick={() => setIsSoundsPanelOpen(p => !p)} title="Звуки" aria-label="Звуки">
+                      <Icon name="music" size={22} />
                     </button>
-                    <button className={`fs-btn ${isChatOpen ? 'fs-btn--active' : ''}`} onClick={() => setIsChatOpen(p => !p)}>
-                      <span className="fs-btn-icon"><Icon name="chat" size={18} /></span>
-                      <span className="fs-btn-label">Чат</span>
+                    <button className={`ctrl-round ${isChatOpen ? 'ctrl-round--active' : ''}`} onClick={() => setIsChatOpen(p => !p)} title="Чат" aria-label="Чат">
+                      <Icon name="chat" size={22} />
                     </button>
-                    <button className="fs-btn fs-btn--danger" onClick={() => { setIsScreenFullscreen(false); leaveCall(); }}>
-                      <span className="fs-btn-icon"><Icon name="phoneOff" size={18} /></span>
-                      <span className="fs-btn-label">Завершить</span>
+                    <button className="ctrl-round ctrl-round--danger" onClick={() => { setIsScreenFullscreen(false); leaveCall(); }} title="Завершить звонок" aria-label="Завершить звонок">
+                      <Icon name="phoneOff" size={22} />
                     </button>
                   </div>
                 )}

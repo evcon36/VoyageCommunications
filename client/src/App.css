@@ -3745,3 +3745,56 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
    в правом верхнем углу. Опускаем её под шапку. */
 .screen-fullscreen-btn { top: 60px; }
 @media (pointer: coarse) { .screen-fullscreen-btn { top: 66px; } }
+
+/* ── Подпись показа в маленькой плитке ──
+   Подпись «имя — демонстрация экрана» рисовалась одним размером и в крупном
+   окне, и в плитке шириной 110 пикселей: там она вылезала за края и
+   перекрывала само содержимое. В ленте её заменяет метка «экран». */
+.strip-pick .screen-share-label { display: none; }
+
+/* ── Полноэкранный показ ──
+   Панель была отдельным набором кнопок со своими формами, подписями и
+   цветами: рядом с обычной панелью звонка она выглядела из другого
+   приложения. Теперь это тот же материал и те же круглые кнопки. */
+.fs-controls {
+  background: rgba(18,20,24,.72);
+  backdrop-filter: blur(16px) saturate(150%);
+  border: 1px solid rgba(255,255,255,.08);
+  box-shadow: 0 10px 34px rgba(0,0,0,.5);
+  gap: 10px;
+  padding: 10px 14px;
+  color: #f2f4f7;
+}
+/* Иконки рисуются цветом текста кнопки. Цвет не задавался, и система
+   подставляла свой синий: отсюда синие значки посреди тёмной панели. */
+.fs-controls .ctrl-round { color: inherit; }
+.fs-controls .ctrl-round--off { color: #fecaca; }
+.fs-controls .ctrl-round--active { color: var(--accent-ink); }
+.fs-controls .ctrl-round--danger { color: #fff; }
+
+/* Выход из полноэкранного режима: нейтральный круглый значок в безопасной
+   зоне, а не текстовая капсула посреди пустоты */
+.screen-fullscreen-btn {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(0,0,0,.55);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,.08);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  top: max(60px, calc(12px + env(safe-area-inset-top)));
+  right: max(12px, env(safe-area-inset-right));
+}
+.video-stage--fs .screen-fullscreen-btn { top: max(12px, env(safe-area-inset-top)); }
+
+/* Подпись показа прижата к верхнему краю самого кадра, а не висит по центру
+   чёрного поля */
+.video-stage--fs .screen-share-label {
+  top: max(12px, env(safe-area-inset-top));
+  left: max(12px, env(safe-area-inset-left));
+  transform: none;
+}
