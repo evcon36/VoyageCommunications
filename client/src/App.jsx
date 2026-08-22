@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { io } from 'socket.io-client';
 import { LK, loadLiveKit, prefetchLiveKit } from './livekit';
 import { serverUrl, apiFetch, mediaOrigin, onOriginChange, pickOrigin } from './net';
@@ -695,6 +696,7 @@ export default function App() {
   // можно в настройках: кому-то это мешает во время показа экрана.
   const [chatPopups, setChatPopups] = useState(() => localStorage.getItem('chatPopups') !== 'false');
   const [chatToasts, setChatToasts] = useState([]);
+  const toastTimerRef = useRef(null);
   const [mutedUsers, setMutedUsers] = useState(() => new Set());
 
   // Sounds panel
@@ -1943,11 +1945,13 @@ export default function App() {
       // отправил.
       if (!chatPopupsRef.current || chatOpenRef.current) return;
       if (message.userId && message.userId === myIdRef.current) return;
+      // Показываем только последнее сообщение: стопка всплытий заслоняет
+      // разговор, а прочесть успеваешь всё равно верхнее. Новое сообщение
+      // заменяет предыдущее и заново запускает отсчёт.
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      setChatToasts(prev => [...prev.slice(-2), { ...message, id }]);
-      // Три секунды на прочтение, потом плавно гаснет. Больше двух подряд не
-      // копим: иначе при оживлённой переписке экран заливает целиком.
-      setTimeout(() => setChatToasts(prev => prev.filter(t => t.id !== id)), 3000);
+      setChatToasts([{ ...message, id }]);
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setChatToasts([]), 7000);
     });
 
     socket.on('chat-edited', ({ id, text }) => {
@@ -3548,7 +3552,7 @@ export default function App() {
 
       {/* Меню сообщения: правой кнопкой или долгим нажатием. Появляется у
           пальца, но не вылезает за край экрана. */}
-      {msgMenu && (
+      {msgMenu && createPortal((
         isTouchDevice ? (
           /* На телефоне указателя нет, и маленькое меню у пальца попадает под
              сам палец. Поэтому затемняем экран, поднимаем нажатое сообщение
@@ -3587,7 +3591,7 @@ export default function App() {
             </button>
           </div>
         )
-      )}
+      ), document.body)}
 
       {/* Всплывающие сообщения чата: три секунды поверх всего, потом гаснут.
           Стоят над панелью кнопок, чтобы не перекрывать микрофон и сброс. */}
