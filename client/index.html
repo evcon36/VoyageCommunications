@@ -44,7 +44,8 @@
           Не получается открыть. Скорее всего ваш провайдер блокирует этот адрес.
         </div>
         <a id="boot-link" href="#">Открыть запасной вход</a>
-        <div id="boot-tip">Если и он не открывается, попробуйте выключить Wi-Fi и зайти через мобильный интернет.</div>
+        <div id="boot-diag" style="display:none;font-size:13px;color:rgba(244,241,234,.55);font-variant-numeric:tabular-nums"></div>
+        <div id="boot-tip">Если и он не открывается, попробуйте другую сеть или выключите VPN: часть серверов VPN до нас не доходит.</div>
       </div>
     </div>
 
@@ -92,6 +93,21 @@
           }
         };
 
+        // Пока приложение грузится, отдельно проверяем оба входа лёгким
+        // запросом. Если приложение не поднимется, человек увидит не общее
+        // «не открывается», а какой именно вход не дошёл: с этим уже можно
+        // что-то делать, а по общей фразе непонятно ничего.
+        var reach = { coms: null, direct: null };
+        function ping(url, key) {
+          var c = new AbortController();
+          var t = setTimeout(function () { c.abort(); }, 6000);
+          fetch(url + 'favicon-32.png?_=' + Date.now(), { mode: 'no-cors', cache: 'no-store', signal: c.signal })
+            .then(function () { reach[key] = true; }, function () { reach[key] = false; })
+            .finally(function () { clearTimeout(t); });
+        }
+        ping(COMS, 'coms');
+        ping(DIRECT, 'direct');
+
         setTimeout(function () {
           if (booted) return;
 
@@ -106,6 +122,15 @@
           // Оба входа молчат — объясняем словами и даём вернуться на первый
           var note = document.getElementById('boot-note');
           if (note) note.style.display = 'none';
+
+          // Итог проверки словами: что дошло, а что нет
+          var d = document.getElementById('boot-diag');
+          if (d) {
+            var mark = function (v) { return v === true ? '✓' : v === false ? '✕' : '…'; };
+            d.textContent = 'Основной вход ' + mark(reach.coms)
+              + ' · запасной ' + mark(reach.direct);
+            d.style.display = 'block';
+          }
           var box = document.getElementById('boot-alt');
           if (box) box.style.display = 'flex';
           var link = document.getElementById('boot-link');
