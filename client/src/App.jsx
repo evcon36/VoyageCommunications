@@ -874,11 +874,14 @@ export default function App() {
     try {
       const token = localStorage.getItem('token');
       const path = recActive ? '/recordings/stop' : '/recordings/start';
+      // Запуск записи идёт около пяти секунд: сервер убеждается, что она
+      // реально пошла. Ждём дольше обычного и не повторяем на другом входе,
+      // иначе поверх работающей записи запускается вторая.
       const resp = await apiFetch(`${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ roomId: roomIdRef.current }),
-      });
+      }, { timeout: 25000, retry: false });
       const data = await resp.json();
       if (resp.ok) {
         const nowActive = !recActive;

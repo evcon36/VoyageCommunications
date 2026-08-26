@@ -130,8 +130,17 @@ async function tryOnce(origin, path, init, timeoutMs = TIMEOUT_MS) {
 
 // Запрос к серверу. При сетевом сбое пробует остальные входы и запоминает
 // сработавший, чтобы следующие запросы шли сразу туда.
-export async function apiFetch(path, init) {
+// Некоторые запросы нельзя повторять вслепую: они меняют состояние. Запуск
+// записи, например, идёт около пяти секунд, потому что сервер убеждается, что
+// она реально пошла. Слой переключения обрывал попытку раньше и повторял её на
+// другом входе, а запись к этому моменту уже работала: получалась вторая
+// поверх первой, и человек видел ошибку при работающей записи.
+//
+// timeout: сколько ждать ответа. retry: можно ли повторять на другом входе.
+export async function apiFetch(path, init, opts = {}) {
   const order = [current, ...CANDIDATES.filter(o => o !== current)];
+  const allowRetry = opts.retry !== false;
+  const wait = opts.timeout || null;
   let lastError = null;
 
   for (let i = 0; i < order.length; i++) {
@@ -139,9 +148,9 @@ export async function apiFetch(path, init) {
     // Пока есть куда переключиться, ждём недолго: смысл запасного входа в
     // том, чтобы не сидеть в тишине полный таймаут. На последнем даём
     // полный срок, там торопиться уже некуда.
-    const isLast = i === order.length - 1;
+    const isLast = i === order.length - 1 || !allowRetry;
     try {
-      const resp = await tryOnce(origin, path, init, isLast ? TIMEOUT_MS : FIRST_TRY_MS);
+      const resp = await tryOnce(origin, path, init, wait || (isLast ? TIMEOUT_MS : FIRST_TRY_MS));
       // Заглушки блокировщиков и сбои посредника приходят кодами 5xx. Это не
       // ответ нашего сервера, поэтому пробуем следующий вход, а не показываем
       // человеку ошибку.
@@ -153,6 +162,7 @@ export async function apiFetch(path, init) {
       return resp;
     } catch (e) {
       lastError = e;
+      if (!allowRetry) throw e;            // повторять этот запрос нельзя
       if (!isNetworkFailure(e)) throw e;   // ошибка не сетевая, другой вход не поможет
       if (init?.body instanceof FormData) throw e; // тело уже прочитано, повтор не выйдет
     }

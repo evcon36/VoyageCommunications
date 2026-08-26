@@ -115,18 +115,34 @@ router.post('/start', authMiddleware, async (req, res) => {
       });
     } catch (e) { console.error('REC WARN:', e.message); }
 
-    // Chrome в egress иногда не стартует (слабый CPU) — проверяем через 5с,
-    // что запись реально пошла, иначе честно сообщаем об ошибке
-    await new Promise(r => setTimeout(r, 5000));
-    try {
-      const infos = await egress.listEgress({ egressId: info.egressId });
-      const st = Number(infos?.[0]?.status ?? 0);
-      if (st >= 4) { // FAILED/ABORTED
+    // Отвечаем сразу. Раньше здесь ждали пять секунд, чтобы убедиться, что
+    // запись пошла, и держали ответ всё это время. Клиент успевал сдаться по
+    // таймауту и повторить запрос на другом входе, а запись к тому моменту
+    // уже работала: вторая запускалась поверх первой, и человек видел ошибку
+    // при работающей записи.
+    //
+    // Проверка осталась, но идёт в стороне: если запись не поднялась, комната
+    // узнает об этом отдельным сообщением.
+    setTimeout(async () => {
+      try {
+        const infos = await egress.listEgress({ egressId: info.egressId });
+        const st = Number(infos?.[0]?.status ?? 0);
+        if (st < 4) return;   // FAILED и ABORTED начинаются с четырёх
         recTimeline.endRec(rec.id);
-        await prisma.recording.update({ where: { id: rec.id }, data: { status: 'failed', endedAt: new Date() } });
-        return res.status(500).json({ message: 'Запись не запустилась — попробуйте ещё раз' });
-      }
-    } catch {}
+        await prisma.recording.update({
+          where: { id: rec.id },
+          data: { status: 'failed', endedAt: new Date() },
+        });
+        global.io?.to(roomId).emit('recording-state', { active: false, by: req.user.username });
+        global.io?.to(roomId).emit('recording-failed', { message: 'Запись не запустилась' });
+      } catch (e) { console.error('REC VERIFY:', e.message); }
+    }, 5000);
+
+    // Метку записи ставим сразу всем в комнате: раньше это делал клиент,
+    // который её включил, и при обрыве его сообщения остальные не знали,
+    // что идёт запись
+    global.io?.to(roomId).emit('recording-state', { active: true, by: req.user.username });
+
     return res.status(201).json({ recording: rec });
   } catch (e) {
     console.error('REC START ERROR:', e.message);
