@@ -17,11 +17,14 @@ const BASE_PATH = '/communications/';
 // SITE — домен API (VITE_SERVER_URL): к нему клиент обращается за /companies, /rooms, /auth.
 // Валидация бандла проверяет, что этот адрес вшит в сборку.
 const SITE = 'https://voyage-community.ru';
-// CHECK_SITE — где реально лежит эта статика (/var/www/voyage/client/dist). voyage-community.ru/communications/
-// теперь 301 → voyage-coms.ru, а сам dist отдаётся напрямую на поддомене communications.voyage-community.ru.
-// ВНИМАНИЕ: основное приложение для пользователей — voyage-coms.ru → /var/www/voyage-coms/dist,
-// он деплоится ОТДЕЛЬНО (см. deploy/deploy-coms.js).
-const CHECK_SITE = 'https://communications.voyage-community.ru';
+// CHECK_SITE — где проверяем результат. Это же и основной адрес сервиса:
+// voyage-community.ru/communications/ отдаёт /var/www/voyage/client/dist
+// напрямую (редирект на voyage-coms.ru убран 29.08.2026). Голое имя апекса
+// единственное доходит на мобильном интернете в России, поэтому именно этот
+// адрес раздаём людям и вшиваем в мобильные сборки.
+// Поддомены communications.voyage-community.ru и voyage-coms.ru остаются
+// запасными входами, второй деплоится ОТДЕЛЬНО (см. deploy/deploy-coms.js).
+const CHECK_SITE = 'https://voyage-community.ru';
 
 // Файлы, которые обязаны попасть в сборку — иначе деплой прерывается
 const REQUIRED_FILES = [

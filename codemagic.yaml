@@ -25,8 +25,12 @@ workflows:
         BUNDLE_ID: "ru.voyagecoms.app"
         XCODE_PROJECT: "client/ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
-        # адрес боевого API — попадает в бандл на этапе сборки веб-части
-        VITE_SERVER_URL: "https://voyage-coms.ru"
+        # Адрес боевого API. Попадает в бандл на этапе сборки веб-части.
+        # Только голый voyage-community.ru: мобильные операторы РФ режут
+        # соединение по имени хоста, и все поддомены (voyage-coms.ru,
+        # communications.voyage-community.ru) на мобильном интернете
+        # недоступны. Приложение, собранное на поддомен, живёт только под VPN.
+        VITE_SERVER_URL: "https://voyage-community.ru"
         VITE_BASE_PATH: "/"
       node: 22
       xcode: latest
@@ -56,7 +60,7 @@ workflows:
           cd client
           npx vite build --outDir dist-coms
           # бандл обязан ходить в боевой API, иначе приложение будет пустым
-          grep -q "voyage-coms.ru" dist-coms/assets/index-*.js \
+          grep -q "voyage-community.ru" dist-coms/assets/index-*.js \
             || { echo "ОШИБКА: в бандле нет адреса API"; exit 1; }
 
       - name: Убрать из iOS-бандла чужую интеллектуальную собственность
@@ -155,7 +159,8 @@ workflows:
 
     environment:
       vars:
-        VITE_SERVER_URL: "https://voyage-coms.ru"
+        # см. пояснение в воркфлоу ios-testflight выше
+        VITE_SERVER_URL: "https://voyage-community.ru"
         VITE_BASE_PATH: "/"
       node: 22
       java: 21

@@ -53,25 +53,32 @@
 
 <script>
 (function () {
-  // Два независимых входа: один через Cloudflare, второй напрямую в наш сервер.
-  // Некоторые провайдеры блокируют Cloudflare, другие — наш прямой IP, поэтому
-  // ссылка-приглашение сама проверяет оба адреса и открывает тот, что отвечает.
-  var A = 'https://voyage-coms.ru/';
-  var B = 'https://communications.voyage-community.ru/communications/';
-  var PROBE_A = A + 'favicon-32.png';
-  var PROBE_B = B + 'favicon-32.png';
+  // Ссылку-приглашение чаще всего открывают с телефона, а на мобильном
+  // интернете в России из наших адресов доходит только голое имя
+  // voyage-community.ru: оператор читает имя хоста из открытой части
+  // TLS-приветствия, и все поддомены сервиса у него в списке. Поэтому апекс
+  // проверяется первым всегда, независимо от того, откуда скопировали ссылку.
+  var APEX = 'https://voyage-community.ru/communications/';
+  var COMS = 'https://voyage-coms.ru/';
+  var DIRECT = 'https://communications.voyage-community.ru/communications/';
   var TIMEOUT = 4000;
 
   var qs = window.location.search || '';
   var here = window.location.hostname;
-  var onA = here === 'voyage-coms.ru' || here === 'www.voyage-coms.ru';
+
+  // Порядок проверки: сначала апекс, затем адрес, с которого открыли ссылку
+  // (он уже загрузился, значит рабочий), затем оставшийся
+  var onComs = here === 'voyage-coms.ru' || here === 'www.voyage-coms.ru';
+  var order = [APEX, onComs ? COMS : DIRECT, onComs ? DIRECT : COMS];
 
   var statusEl = document.getElementById('status');
   var spinner = document.getElementById('spinner');
   var linksEl = document.getElementById('links');
   var hintEl = document.getElementById('hint');
-  document.getElementById('linkA').href = A + qs;
-  document.getElementById('linkB').href = B + qs;
+  var linkA = document.getElementById('linkA');
+  var linkB = document.getElementById('linkB');
+  linkA.href = APEX + qs;
+  linkB.href = order[1] + qs;
 
   function go(base) {
     statusEl.textContent = 'Открываем звонок…';
@@ -82,42 +89,34 @@
     spinner.style.display = 'none';
     statusEl.textContent = msg;
     linksEl.style.display = 'flex';
-    hintEl.textContent = 'Если один адрес не открывается — у вашего провайдера может быть ' +
+    hintEl.textContent = 'Если один адрес не открывается, у вашего провайдера может быть ' +
       'ограничение. Попробуйте второй, это тот же сервис с теми же аккаунтами.';
   }
 
   // Проверка доступности: no-cors даёт «непрозрачный» ответ, но сам факт
-  // успешного запроса означает, что домен доступен. Сетевой сбой — reject.
-  function probe(url) {
+  // успешного запроса означает, что адрес доступен. Сетевой сбой это reject.
+  function probe(base) {
     if (!window.fetch || !window.AbortController) return Promise.reject();
     var ctrl = new AbortController();
     var timer = setTimeout(function () { ctrl.abort(); }, TIMEOUT);
-    return fetch(url + '?_=' + Date.now(), {
+    return fetch(base + 'favicon-32.png?_=' + Date.now(), {
       mode: 'no-cors', cache: 'no-store', signal: ctrl.signal
     }).then(function (r) { clearTimeout(timer); return r; },
       function (e) { clearTimeout(timer); throw e; });
   }
 
-  // Порядок: сначала пробуем тот адрес, с которого открыли ссылку (он уже загрузился),
-  // затем — второй. Так человек остаётся на привычном домене, если он рабочий.
-  var first = onA ? { url: PROBE_A, base: A } : { url: PROBE_B, base: B };
-  var second = onA ? { url: PROBE_B, base: B } : { url: PROBE_A, base: A };
+  // Идём по списку сверху вниз и открываем первый ответивший
+  (function next(i) {
+    if (i >= order.length) return showChoice('Не удалось проверить адреса автоматически');
+    if (i > 0) statusEl.textContent = 'Пробуем запасной адрес…';
+    probe(order[i]).then(function () { go(order[i]); },
+                         function () { next(i + 1); });
+  })(0);
 
-  probe(first.url)
-    .then(function () { go(first.base); })
-    .catch(function () {
-      statusEl.textContent = 'Основной адрес недоступен, пробуем запасной…';
-      probe(second.url)
-        .then(function () { go(second.base); })
-        .catch(function () {
-          showChoice('Не удалось проверить адреса автоматически');
-        });
-    });
-
-  // страховка: если проверка зависла дольше обычного — показываем выбор вручную
+  // страховка: если проверка зависла дольше обычного, показываем выбор вручную
   setTimeout(function () {
     if (linksEl.style.display !== 'flex') showChoice('Выберите адрес для входа');
-  }, TIMEOUT * 2 + 500);
+  }, TIMEOUT * order.length + 500);
 })();
 </script>
 </body>

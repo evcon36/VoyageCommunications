@@ -54,10 +54,9 @@
     <script>
       // Выбор рабочего входа ДО того, как приложение заработало.
       //
-      // У сервиса два адреса, и ни один не открывается у всех: часть операторов
-      // душит подсеть нашего сервера (мелкое проходит, крупное рвётся), часть
-      // сетей плохо ходит в Cloudflare. Причём у одного человека компьютер
-      // может открывать один адрес, а телефон только другой.
+      // У сервиса несколько адресов, и ни один не открывается у всех: на
+      // мобильном интернете в России доходит только голое имя апекса, а на
+      // части зарубежных сетей наоборот лучше идёт Cloudflare.
       //
       // Пробовать «кто быстрее отдаст файл» бесполезно: рвётся не мелочь, а
       // большие куски, и проба их не повторяет. Поэтому признак один и честный:
@@ -65,13 +64,20 @@
       // целиком, вместе со страницей и стилями. Так не бывает смеси файлов с
       // двух адресов и не нужны заголовки кросс-доступа.
       (function () {
+        // Голое имя voyage-community.ru доходит на мобильном интернете в
+        // России, а поддомены сервиса там закрыты: оператор читает имя хоста
+        // из открытой части TLS-приветствия и рвёт соединение по списку.
+        // Путь после слэша ему не виден, поэтому апекс с путём работает.
+        var APEX = 'https://voyage-community.ru/communications/';
         var COMS = 'https://voyage-coms.ru/';
-        var DIRECT = 'https://communications.voyage-community.ru/communications/';
         var WAIT_MS = 11000;   // столько ждём запуска на медленной сети
 
         var host = location.hostname;
-        var alt = (host === 'voyage-coms.ru' || host === 'www.voyage-coms.ru') ? DIRECT
-                : (host === 'communications.voyage-community.ru') ? COMS
+        // С заблокированных поддоменов уводим на апекс. С апекса запасным
+        // остаётся Cloudflare: он выручает там, где плохо ходит наш адрес.
+        var alt = (host === 'voyage-coms.ru' || host === 'www.voyage-coms.ru'
+                || host === 'communications.voyage-community.ru') ? APEX
+                : (host === 'voyage-community.ru' || host === 'www.voyage-community.ru') ? COMS
                 : null;
 
         var params = new URLSearchParams(location.search);
@@ -97,7 +103,7 @@
         // запросом. Если приложение не поднимется, человек увидит не общее
         // «не открывается», а какой именно вход не дошёл: с этим уже можно
         // что-то делать, а по общей фразе непонятно ничего.
-        var reach = { coms: null, direct: null };
+        var reach = { apex: null, coms: null };
         function ping(url, key) {
           var c = new AbortController();
           var t = setTimeout(function () { c.abort(); }, 6000);
@@ -105,8 +111,8 @@
             .then(function () { reach[key] = true; }, function () { reach[key] = false; })
             .finally(function () { clearTimeout(t); });
         }
+        ping(APEX, 'apex');
         ping(COMS, 'coms');
-        ping(DIRECT, 'direct');
 
         setTimeout(function () {
           if (booted) return;
@@ -127,8 +133,8 @@
           var d = document.getElementById('boot-diag');
           if (d) {
             var mark = function (v) { return v === true ? '✓' : v === false ? '✕' : '…'; };
-            d.textContent = 'Основной вход ' + mark(reach.coms)
-              + ' · запасной ' + mark(reach.direct);
+            d.textContent = 'Основной вход ' + mark(reach.apex)
+              + ' · запасной ' + mark(reach.coms);
             d.style.display = 'block';
           }
           var box = document.getElementById('boot-alt');
