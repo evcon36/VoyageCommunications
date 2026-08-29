@@ -2,7 +2,8 @@
 // Токен — в deploy/codemagic.config.json (не коммитится, см. .gitignore).
 // Получить токен: Codemagic → Personal account settings → API tokens.
 //
-//   node deploy/codemagic.js start            запустить сборку ветки ios-testflight
+//   node deploy/codemagic.js start            запустить сборку для iPhone
+//   node deploy/codemagic.js start android    запустить сборку APK
 //   node deploy/codemagic.js status           последние сборки
 //   node deploy/codemagic.js watch [buildId]  ждать окончания (по умолчанию последняя)
 //
@@ -13,7 +14,8 @@ const fs = require('fs');
 const path = require('path');
 
 const APP_ID = '6a6e491cb5b21006155826f5';   // VoyageCommunications
-const WORKFLOW = 'ios-testflight';           // ключ из codemagic.yaml
+// ключи воркфлоу из codemagic.yaml
+const WORKFLOWS = { ios: 'ios-testflight', android: 'android-apk' };
 const BRANCH = 'ios-testflight';
 const API = 'https://api.codemagic.io';
 
@@ -36,19 +38,22 @@ async function api(pathname, init = {}) {
 
 const builds = () => api(`/builds?appId=${APP_ID}&limit=8`).then(d => d.builds || []);
 
-async function start() {
+async function start(which = 'ios') {
+  const workflowId = WORKFLOWS[which];
+  if (!workflowId) throw new Error(`Неизвестная сборка "${which}". Доступны: ${Object.keys(WORKFLOWS).join(', ')}`);
   const { buildId } = await api('/builds', {
     method: 'POST',
-    body: JSON.stringify({ appId: APP_ID, workflowId: WORKFLOW, branch: BRANCH }),
+    body: JSON.stringify({ appId: APP_ID, workflowId, branch: BRANCH }),
   });
-  console.log(`Сборка запущена: ${buildId}`);
+  console.log(`Сборка запущена (${workflowId}): ${buildId}`);
   console.log(`https://codemagic.io/app/${APP_ID}/build/${buildId}`);
   return buildId;
 }
 
 async function status() {
   for (const b of await builds()) {
-    console.log(`${b._id}  ${String(b.status).padEnd(10)}  ${b.startedAt || ''}  ${b.branch || ''}`);
+    const wf = b.config?.name || b.workflowId || b.workflow?.name || '';
+    console.log(`${b._id}  ${String(b.status).padEnd(10)}  ${String(wf).padEnd(18)}  ${b.startedAt || ''}`);
   }
 }
 
@@ -71,5 +76,7 @@ async function watch(id) {
 }
 
 const cmd = process.argv[2] || 'status';
-const run = cmd === 'start' ? start : cmd === 'watch' ? () => watch(process.argv[3]) : status;
+const run = cmd === 'start' ? () => start(process.argv[3] || 'ios')
+          : cmd === 'watch' ? () => watch(process.argv[3])
+          : status;
 run().catch(e => { console.error('Ошибка:', e.message); process.exit(1); });
