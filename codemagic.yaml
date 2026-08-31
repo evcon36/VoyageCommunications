@@ -96,9 +96,25 @@ workflows:
 
       - name: Номер сборки
         script: |
-          # номер должен расти монотонно, иначе TestFlight отклонит загрузку
-          BUILD_NUMBER=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo 0)
-          agvtool new-version -all $(($BUILD_NUMBER + 1))
+          # Номер обязан расти: TestFlight отклоняет загрузку с номером, который
+          # уже был («attribute with a value that has already been used»).
+          #
+          # Раньше номер спрашивали у App Store Connect и прибавляли единицу.
+          # Один раз этот запрос вернул не то: при загруженной сборке 49
+          # получилось 39, и публикация ушла в отказ. Ответу внешней службы
+          # здесь верить нельзя, поэтому считаем сами.
+          #
+          # BUILD_NUMBER даёт Codemagic, это счётчик сборок приложения, он
+          # растёт всегда и сам по себе. FLOOR поднимает результат выше всего,
+          # что уже загружено вручную или прошлыми правилами.
+          FLOOR=49
+          NEW=$((FLOOR + BUILD_NUMBER))
+          echo "счётчик Codemagic: $BUILD_NUMBER, нижняя граница: $FLOOR, ставим номер: $NEW"
+          if [ "$NEW" -le "$FLOOR" ]; then
+            echo "ОШИБКА: номер $NEW не больше нижней границы $FLOOR"; exit 1
+          fi
+          agvtool new-version -all "$NEW"
+          agvtool what-version
         working_directory: client/ios/App
 
       - name: Настройка подписи
