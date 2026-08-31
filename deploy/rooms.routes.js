@@ -402,6 +402,11 @@ router.post('/guest-token', async (req, res) => {
     // название, которое ему продиктовали, и упирался в «комната не найдена».
     // Теперь такая комната заводится на месте как открытая. Лимиты ей ставим
     // гостевые, иначе через произвольное название их можно было бы обойти.
+    //
+    // И сразу с приёмной. Названия люди берут короткие и обычные («планерка»,
+    // «dnd»), а такое название подбирается словарём за секунды, и посторонний
+    // оказывался прямо в чужом разговоре. Возможность «продиктовал название,
+    // человек вошёл» остаётся, только пускает теперь тот, кто уже внутри.
     if (!room) {
       const clean = String(roomId).trim().slice(0, 60);
       if (!/^[a-zA-Z0-9._-]{3,60}$/.test(clean)) {
@@ -420,6 +425,7 @@ router.post('/guest-token', async (req, res) => {
           isPrivate: false,
           inviteKey: makeKey(),
           isGuestRoom: true,
+          waitingRoom: true,
           expiresAt: new Date(Date.now() + GUEST_ROOM_MINUTES * 60 * 1000),
           maxPeers: GUEST_ROOM_PEERS,
         },
@@ -435,8 +441,10 @@ router.post('/guest-token', async (req, res) => {
     const blocked = await guestLimitBlock(room, { rejoiningIdentity: `guest#${base}` });
     if (blocked) return res.status(blocked.status).json(blocked.body);
 
-    // Комната ожидания — уважаем настройку комнаты: гость всегда «не владелец»
-    if (room.waitingRoom) {
+    // Комната ожидания. Того, кто её и завёл, держать в собственной приёмной
+    // нельзя: впускать было бы некому, и человек ждал бы сам себя.
+    const isRoomOwner = room.ownerId === `guest#${base}`;
+    if (room.waitingRoom && !isRoomOwner) {
       const admitted = global.admittedWaiters?.get(roomId);
       if (!admitted || !admitted.has(base)) {
         return res.status(202).json({ waiting: true });
