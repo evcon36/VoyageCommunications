@@ -26,7 +26,7 @@ const BUILD_ENV = {
   VITE_SERVER_URL: SERVER_URL,
 };
 
-const REQUIRED_FILES = ['index.html', 'applause.mp3', 'trump-money.mp3', 'trump-amazing.mp3', 'trump-beautiful.mp3', 'trump-50.mp3'];
+const REQUIRED_FILES = ['index.html', 'applause.mp3'];
 
 function fail(msg) { console.error('\n❌ ДЕПЛОЙ ОСТАНОВЛЕН: ' + msg); process.exit(1); }
 function loadConfig() {

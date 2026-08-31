@@ -178,19 +178,14 @@ function playChime(joined) {
   } catch {}
 }
 
-// All available sounds
-// Клипы с голосом реального публичного лица — это чужая интеллектуальная
-// собственность, и App Store такое отклоняет (Guideline 5.2.1). На iOS
-// оставляем только нейтральные аплодисменты; сами файлы вырезаются из
-// iOS-сборки отдельным шагом в codemagic.yaml.
+// Звуки в звонке.
+//
+// Клипы с голосом реального публичного лица убраны совсем. Раньше их прятали
+// только на iOS, чтобы не получить отказ по Guideline 5.2.1, но это чужая
+// интеллектуальная собственность, и в вебе риск оставался ровно таким же,
+// просто без проверяющего. Прятать нарушение и устранять его не одно и то же.
 const SOUNDS = [
-  { id: 'applause',       emoji: '👏', label: 'Аплодисменты',    file: BASE + 'applause.mp3' },
-  ...(IS_IOS ? [] : [
-    { id: 'trump-money',    emoji: '💵', label: 'We need money',   file: BASE + 'trump-money.mp3' },
-    { id: 'trump-amazing',  emoji: '✨', label: "You're amazing",  file: BASE + 'trump-amazing.mp3' },
-    { id: 'trump-beautiful',emoji: '💛', label: "You're beautiful",file: BASE + 'trump-beautiful.mp3' },
-    { id: 'trump-50',       emoji: '📊', label: '50%',             file: BASE + 'trump-50.mp3' },
-  ]),
+  { id: 'applause', emoji: '👏', label: 'Аплодисменты', file: BASE + 'applause.mp3' },
 ];
 
 // Почему звонок закончился — человеку нужно объяснение, а не тишина

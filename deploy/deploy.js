@@ -30,10 +30,6 @@ const CHECK_SITE = 'https://voyage-community.ru';
 const REQUIRED_FILES = [
   'index.html',
   'applause.mp3',
-  'trump-money.mp3',
-  'trump-amazing.mp3',
-  'trump-beautiful.mp3',
-  'trump-50.mp3',
 ];
 
 function fail(msg) {
