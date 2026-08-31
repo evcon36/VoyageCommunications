@@ -24,7 +24,16 @@ const IS_IOS = typeof navigator !== 'undefined' && (
 // у оператора закрыт, честно долбился в него с повторами, показывая «не
 // дозвонились до сервера». Теперь ждём выбора входа: задержка меньше
 // полусекунды, зато первый же запрос идёт по рабочему адресу.
-const socket = io(serverUrl(), { transports: ['websocket', 'polling'], autoConnect: false });
+// На айфоне обычные запросы идут через системную сеть, а не через страницу
+// (иначе там не уходит ни один запрос сложнее простого GET). Запасной
+// транспорт сокета устроен на тех же запросах и после такой подмены ломается,
+// поэтому на айфоне оставляем только вебсокет. Android работает по-обычному,
+// там запасной транспорт нужен и его не трогаем.
+const IS_IOS_APP = window.Capacitor?.getPlatform?.() === 'ios';
+const socket = io(serverUrl(), {
+  transports: IS_IOS_APP ? ['websocket'] : ['websocket', 'polling'],
+  autoConnect: false,
+});
 pickOrigin().then((origin) => {
   try { socket.io.uri = origin; socket.io.opts.host = undefined; } catch { /* адрес не сменился */ }
   socket.connect();

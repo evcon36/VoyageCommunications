@@ -131,13 +131,33 @@ export function pickOrigin() {
   return probing;
 }
 
+// Ошибка с именем AbortError: верхний слой считает такую сетевой и пробует
+// следующий вход, а не показывает человеку «ошибка сервера».
+function timedOut() {
+  const e = new Error('Истекло время ожидания');
+  e.name = 'AbortError';
+  return e;
+}
+
 async function tryOnce(origin, path, init, timeoutMs = TIMEOUT_MS) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  // В приложении на телефоне запросы идут через системную сеть, а не через
+  // страницу, и остановка по AbortController там срабатывает не всегда. Без
+  // второго ограничения запрос висел бы бесконечно, и человек смотрел бы на
+  // крутящийся кружок вместо понятной ошибки.
+  let hardTimer;
+  const hardLimit = new Promise((_, reject) => {
+    hardTimer = setTimeout(() => reject(timedOut()), timeoutMs + 500);
+  });
   try {
-    return await fetch(`${origin}${path}`, { ...init, signal: init?.signal || ctrl.signal });
+    return await Promise.race([
+      fetch(`${origin}${path}`, { ...init, signal: init?.signal || ctrl.signal }),
+      hardLimit,
+    ]);
   } finally {
     clearTimeout(timer);
+    clearTimeout(hardTimer);
   }
 }
 

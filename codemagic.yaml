@@ -75,6 +75,20 @@ workflows:
           fi
           echo "спорные аудиофайлы удалены из iOS-бандла"
 
+      - name: Включить системную сеть для iOS
+        script: |
+          cd client
+          # На айфоне страница приложения живёт по адресу capacitor://localhost.
+          # WebKit не выпускает из такого адреса ни один запрос сложнее простого
+          # GET: вход и вход в звонок уходили в никуда, до сервера не доходило
+          # вообще ничего (проверено по логам: за месяц ноль запросов).
+          # Поэтому на айфоне запросы идут через системную сеть, минуя страницу.
+          # Android этого не требует: там адрес страницы обычный https, и всё
+          # работает как в браузере, поэтому в самом файле настройка выключена.
+          node -e "const f='capacitor.config.json',fs=require('fs'),c=JSON.parse(fs.readFileSync(f,'utf8'));c.plugins.CapacitorHttp.enabled=true;fs.writeFileSync(f,JSON.stringify(c,null,2))"
+          grep -A2 CapacitorHttp capacitor.config.json
+          grep -q '"enabled": true' capacitor.config.json             || { echo "ОШИБКА: системная сеть для iOS не включилась"; exit 1; }
+
       - name: Синхронизация с нативным проектом
         script: |
           cd client
