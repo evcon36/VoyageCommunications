@@ -13,6 +13,7 @@ const internalRoutes = require('./src/routes/internal.routes');
 const prisma = require('./src/lib/prisma');
 const recTimeline = require('./src/lib/recTimeline');
 const { verifyToken } = require('./src/lib/jwt');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 
@@ -31,6 +32,13 @@ const ALLOWED_ORIGINS = [
   "http://localhost",
   "https://localhost",
 ];
+
+// Настоящий адрес человека приходит от nginx заголовком. Без этой строки
+// Express считает адресом сам nginx, то есть 127.0.0.1 у всех подряд, и любое
+// ограничение «столько-то с адреса» превращается в общее на весь сервис: один
+// перебор закрывал доступ всем остальным. Доверяем только петле: заголовок от
+// постороннего, пришедшего мимо nginx, не в счёт.
+app.set('trust proxy', 'loopback');
 
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(express.json({ limit: "1mb" }));
@@ -159,11 +167,35 @@ async function endSession(socket) {
   }
 }
 
+// ── Право войти в комнату ──
+// Раньше «join-room» пускал кого угодно в любую комнату по её названию.
+// Видео при этом было защищено токеном, а вот переписка, список участников и
+// события звонка нет: посторонний подключался к сокету, называл комнату и
+// читал чужой разговор, не появляясь ни у кого на экране.
+//
+// Отдельный пропуск заводить не стали: у того, кому вход разрешён, уже есть
+// токен медиасервера на эту самую комнату. Он подписан нашим ключом и внутри
+// несёт название комнаты, поэтому годится как доказательство права.
+function roomTokenOk(roomId, token) {
+  const secret = process.env.LIVEKIT_API_SECRET;
+  if (!secret || !token) return false;
+  try {
+    const claims = jwt.verify(String(token), secret);   // подпись и срок годности
+    return claims?.video?.roomJoin === true && claims?.video?.room === roomId;
+  } catch {
+    return false;
+  }
+}
+
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  socket.on('join-room', async ({ roomId, userName, userId }) => {
+  socket.on('join-room', async ({ roomId, userName, userId, roomToken }) => {
     if (!roomId) return;
+    if (!roomTokenOk(roomId, roomToken)) {
+      socket.emit('room-denied', { message: 'Нет доступа к этой комнате' });
+      return;
+    }
     if (socket.data.roomId) {
       await endSession(socket);
       removeUserFromRoom(socket.data.roomId, socket.id);
@@ -327,19 +359,26 @@ io.on('connection', (socket) => {
     // впускать может только тот, кто сам уже в этой комнате
     if (!inRoom(roomId)) return;
     if (!admittedWaiters.has(roomId)) admittedWaiters.set(roomId, new Set());
-    // для гостей вместо id аккаунта приходит их временный guestId
-    admittedWaiters.get(roomId).add(String(userId || socketId));
+    // Для гостей вместо id аккаунта приходит их номер, а он теперь подписан.
+    // Запоминаем открытую часть: её же проверит выдача токена.
+    const waiterKey = String(userId || socketId).split('.')[0];
+    admittedWaiters.get(roomId).add(waiterKey);
     io.to(socketId).emit('wait-admitted', { roomId });
   });
 
   socket.on('wait-deny', ({ roomId, socketId }) => {
     if (!socketId) return;
+    // отказывать, как и впускать, может только тот, кто сам уже в комнате
+    if (!inRoom(roomId)) return;
     io.to(socketId).emit('wait-denied', { roomId });
   });
 
-  socket.on('offer', ({ roomId, offer }) => socket.to(roomId).emit('offer', offer));
-  socket.on('answer', ({ roomId, answer }) => socket.to(roomId).emit('answer', answer));
-  socket.on('ice-candidate', ({ roomId, candidate }) => socket.to(roomId).emit('ice-candidate', candidate));
+  // Старый путь прямого соединения. Пересылка шла в любую названную комнату
+  // без проверки, поэтому посторонний мог вклиниваться в чужие переговоры о
+  // соединении. Теперь только из своей комнаты.
+  socket.on('offer', ({ roomId, offer }) => { if (inRoom(roomId)) socket.to(roomId).emit('offer', offer); });
+  socket.on('answer', ({ roomId, answer }) => { if (inRoom(roomId)) socket.to(roomId).emit('answer', answer); });
+  socket.on('ice-candidate', ({ roomId, candidate }) => { if (inRoom(roomId)) socket.to(roomId).emit('ice-candidate', candidate); });
 
   // Кто отправил какое сообщение. Сообщения нигде не хранятся, живут только у
   // участников на экране, поэтому право на правку и удаление сервер помнит

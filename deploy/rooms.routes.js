@@ -42,6 +42,36 @@ function iceServers(tag) {
   return list;
 }
 
+// ── Номер гостя, которому можно верить ──
+// Раньше номер гостя приходил с клиента как есть и сразу становился его
+// личностью на медиасервере. А медиасервер закрывает прежнее соединение, когда
+// приходит второй с той же личностью. То есть любой участник видел чужой номер
+// в списке и мог этим номером выкидывать человека из звонка сколько угодно раз,
+// а заодно пройти приёмную вместо него.
+//
+// Теперь номер выдаёт сервер и подписывает своим ключом. Подделать нельзя,
+// подсмотреть в списке участников тоже: там видна только открытая часть.
+const GUEST_SECRET = process.env.JWT_SECRET || '';
+
+function guestSign(base) {
+  const mac = crypto.createHmac('sha256', GUEST_SECRET).update(base).digest('base64url').slice(0, 22);
+  return `${base}.${mac}`;
+}
+
+// Возвращает открытую часть, если подпись верна, иначе null
+function guestBase(raw) {
+  const [base, mac] = String(raw || '').split('.');
+  if (!base || !mac || !GUEST_SECRET) return null;
+  if (!/^[A-Za-z0-9_-]{1,40}$/.test(base)) return null;
+  const expected = guestSign(base).split('.')[1];
+  const a = Buffer.from(mac), b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  return base;
+}
+
+// Свежий номер для того, кто пришёл впервые или принёс негодный
+function guestFresh() { return crypto.randomBytes(9).toString('base64url'); }
+
 // ── Гостевые комнаты ──
 // Комната, созданная без аккаунта, живёт 40 минут и вмещает 5 человек.
 // Признак ставится при создании и не снимается: если бы лимит зависел от
@@ -102,7 +132,8 @@ router.post('/guest-create', async (req, res) => {
       return res.status(429).json({ message: 'Слишком много комнат подряд. Попробуйте позже' });
     }
     const { name, guestId } = req.body || {};
-    const owner = String(guestId || '').slice(0, 64) || `guest#${crypto.randomBytes(4).toString('hex')}`;
+    const base = guestBase(guestId) || guestFresh();
+    const owner = `guest#${base}`;
     const room = await prisma.room.create({
       data: {
         slug: makeSlug(),
@@ -126,6 +157,8 @@ router.post('/guest-create', async (req, res) => {
         isGuestRoom: true,
       },
       limits: { minutes: GUEST_ROOM_MINUTES, peers: GUEST_ROOM_PEERS },
+      // клиент запоминает выданный номер и присылает его дальше как есть
+      guestId: guestSign(base),
     });
   } catch (e) {
     console.error('GUEST ROOM CREATE ERROR:', e);
@@ -356,6 +389,9 @@ router.post('/guest-token', async (req, res) => {
     const { roomId, key, name, guestId } = req.body || {};
     if (!roomId) return res.status(400).json({ message: 'roomId обязателен' });
 
+    // Номер гостя выдаём и подписываем сами, присланному верим только с подписью
+    const base = guestBase(guestId) || guestFresh();
+
     // Три вида комнат, и вход в каждый устроен по-своему:
     //   открытая   — входит любой, кто знает название, ключ не нужен;
     //   приватная  — только по полной ссылке или для тех, кого уже впустили;
@@ -379,7 +415,7 @@ router.post('/guest-token', async (req, res) => {
         data: {
           slug: clean,
           name: clean,
-          ownerId: String(guestId || '').slice(0, 64) || `guest#${crypto.randomBytes(4).toString('hex')}`,
+          ownerId: `guest#${base}`,
           ownerName: String(name || 'Гость').slice(0, 32),
           isPrivate: false,
           inviteKey: makeKey(),
@@ -396,13 +432,13 @@ router.post('/guest-token', async (req, res) => {
       return res.status(403).json({ message: 'Приватная комната: нужна полная ссылка-приглашение' });
     }
 
-    const blocked = await guestLimitBlock(room, { rejoiningIdentity: guestId ? `guest#${guestId}` : null });
+    const blocked = await guestLimitBlock(room, { rejoiningIdentity: `guest#${base}` });
     if (blocked) return res.status(blocked.status).json(blocked.body);
 
     // Комната ожидания — уважаем настройку комнаты: гость всегда «не владелец»
     if (room.waitingRoom) {
       const admitted = global.admittedWaiters?.get(roomId);
-      if (!admitted || !admitted.has(String(guestId || ''))) {
+      if (!admitted || !admitted.has(base)) {
         return res.status(202).json({ waiting: true });
       }
     }
@@ -414,10 +450,10 @@ router.post('/guest-token', async (req, res) => {
     const clean = String(name || '').trim().slice(0, 32);
     const displayName = clean || await nextGuestName(roomId);
 
-    // У гостя постоянная часть это его собственный номер устройства: он и
-    // отличает одного гостя от другого, и остаётся тем же при переподключении
-    const stable = String(guestId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40)
-      || crypto.randomBytes(4).toString('hex');
+    // Открытая часть номера гостя: она отличает одного гостя от другого и
+    // остаётся той же при переподключении. Негодную подпись не принимаем и
+    // просто выдаём новый номер, а не доверяем присланному.
+    const stable = base;
     const at = new AccessToken(apiKey, apiSecret, {
       // префикс guest# — по нему сервер и клиент отличают гостя от аккаунта
       identity: `guest#${stable}`,
@@ -436,7 +472,12 @@ router.post('/guest-token', async (req, res) => {
     });
 
     const token = await at.toJwt();
-    return res.json({ token, wsUrl: process.env.LIVEKIT_WS_URL, name: displayName, guest: true, ice: iceServers('guest') });
+    return res.json({
+      token, wsUrl: process.env.LIVEKIT_WS_URL, name: displayName, guest: true,
+      ice: iceServers('guest'),
+      // выданный номер клиент запоминает и присылает в следующий раз
+      guestId: guestSign(base),
+    });
   } catch (error) {
     console.error('GUEST TOKEN ERROR:', error);
     return res.status(500).json({ message: 'Ошибка генерации токена' });

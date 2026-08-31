@@ -12,6 +12,7 @@ const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const jwt = require('jsonwebtoken');
 
 const router = express.Router();
 
@@ -55,6 +56,26 @@ setInterval(() => {
   }
 }, 60_000).unref();
 
+// Право положить файл в комнату.
+//
+// Раньше этот адрес не спрашивал вообще ничего: любой человек из интернета мог
+// класть файлы до 15 МБ на наш диск и получать на них постоянную ссылку с
+// нашего домена. Это и место на диске, и чужие файлы под нашим именем, что для
+// домена, за которым и так присматривают, отдельно плохо.
+//
+// Доказательством служит токен медиасервера: он подписан нашим ключом, внутри
+// несёт название комнаты и живёт четыре часа. У всех, кто в звонке, он уже есть.
+function roomTokenOk(roomId, token) {
+  const secret = process.env.LIVEKIT_API_SECRET;
+  if (!secret || !token) return false;
+  try {
+    const claims = jwt.verify(String(token), secret);
+    return claims?.video?.roomJoin === true && claims?.video?.room === roomId;
+  } catch {
+    return false;
+  }
+}
+
 router.post('/upload',
   express.raw({ type: '*/*', limit: MAX_BYTES }),
   async (req, res) => {
@@ -76,6 +97,11 @@ router.post('/upload',
       // порождают папки вида «....etc», в которых потом не разобраться
       const room = String(req.query.room || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60);
       if (!room) return res.status(400).json({ message: 'Не указана комната' });
+
+      const pass = req.get('X-Room-Token') || '';
+      if (!roomTokenOk(room, pass)) {
+        return res.status(403).json({ message: 'Файлы можно отправлять только из своего звонка' });
+      }
 
       const rawName = String(req.query.name || 'файл').slice(0, 120);
       // Расширение берём из имени, но доверяем ему только после сверки с

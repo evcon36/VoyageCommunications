@@ -637,11 +637,24 @@ export default function App() {
   const [guestNameInput, setGuestNameInput] = useState('');
   const [guestBusy, setGuestBusy] = useState(false);
   const [guestError, setGuestError] = useState('');
-  // стабильный идентификатор гостя на время сессии — нужен приёмной,
-  // чтобы «впустить» относилось именно к этому человеку
-  const guestIdRef = useRef(
-    `g-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`,
-  );
+  // Номер гостя нужен приёмной, чтобы «впустить» относилось именно к этому
+  // человеку, и медиасерверу, чтобы отличать гостей друг от друга.
+  //
+  // Раньше клиент придумывал его сам. Из-за этого чужой номер, видный в списке
+  // участников, можно было присвоить и выкидывать человека из звонка. Теперь
+  // номер выдаёт и подписывает сервер, а мы только храним выданный.
+  const guestIdRef = useRef((() => {
+    try { return localStorage.getItem('coms.guestId') || ''; } catch { return ''; }
+  })());
+  const rememberGuestId = (id) => {
+    if (!id || id === guestIdRef.current) return;
+    guestIdRef.current = id;
+    try { localStorage.setItem('coms.guestId', id); } catch { /* приватный режим */ }
+  };
+
+  // Токен комнаты подтверждает право быть здесь: его же спрашивают сокет и
+  // отправка файлов, иначе в комнату мог зайти любой, кто знает название
+  const roomTokenRef = useRef(null);
 
   const [joined, setJoined] = useState(false);
   const joinedRef = useRef(false);              // для обработчиков сокета
@@ -1626,7 +1639,8 @@ export default function App() {
       });
       if (resp.status === 429) { setStatus('Слишком много комнат подряд. Попробуйте позже'); return null; }
       if (!resp.ok) { setStatus('Не удалось создать комнату'); return null; }
-      const { room, limits } = await resp.json();
+      const { room, limits, guestId } = await resp.json();
+      rememberGuestId(guestId);
       inviteKeyRef.current = room.inviteKey;
       setRoomId(room.slug);
       setGuestLimits({ ...limits, expiresAt: room.expiresAt });
@@ -2108,6 +2122,14 @@ export default function App() {
     return () => socket.off('connect', rejoin);
   }, []);
 
+  // Сервер перестал пускать в комнату кого угодно по её названию. Отказ должен
+  // быть виден словами, иначе чат и список участников просто молча не работают.
+  useEffect(() => {
+    const denied = () => setStatus('Нет доступа к этой комнате. Откройте звонок заново по ссылке');
+    socket.on('room-denied', denied);
+    return () => socket.off('room-denied', denied);
+  }, []);
+
   // Persist and apply volumes
   useEffect(() => { localStorage.setItem('vol_master', masterVolume); }, [masterVolume]);
   useEffect(() => { localStorage.setItem('vol_applause', applauseVolume); }, [applauseVolume]);
@@ -2314,7 +2336,9 @@ export default function App() {
         return;
       }
 
-      const { token: lkToken, wsUrl: wsFromServer, ice } = await resp.json();
+      const { token: lkToken, wsUrl: wsFromServer, ice, guestId: issuedGuestId } = await resp.json();
+      rememberGuestId(issuedGuestId);
+      roomTokenRef.current = lkToken;
 
       // Сервер отдаёт адрес медиасервера жёстко прописанным, и это был третий
       // домен из трёх. Получалось, что запросы шли через рабочий вход, а сам
@@ -2581,7 +2605,7 @@ export default function App() {
       }
       forceUpdate();
 
-      const joinPayload = { roomId: slug, userName: userName.trim(), userId: authUser?.id };
+      const joinPayload = { roomId: slug, userName: userName.trim(), userId: authUser?.id, roomToken: lkToken };
       socket.emit('join-room', joinPayload);
       joinPayloadRef.current = joinPayload;
       checkRecordingStatus(slug);
@@ -2830,7 +2854,11 @@ export default function App() {
       const name = encodeURIComponent(file.name || 'файл');
       const resp = await apiFetch(`/chat/upload?room=${room}&name=${name}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          // право положить файл именно в эту комнату
+          'X-Room-Token': roomTokenRef.current || '',
+        },
         body: file,
       });
       const data = await resp.json().catch(() => ({}));
