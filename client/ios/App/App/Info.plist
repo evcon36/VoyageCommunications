@@ -70,6 +70,10 @@
 	<string>Камера нужна, чтобы вас видели другие участники видеозвонка.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Микрофон нужен, чтобы вас слышали другие участники звонка.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Доступ к фото нужен, чтобы прикрепить снимок к сообщению в чате звонка.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Доступ нужен, чтобы сохранить в галерею картинку из чата звонка.</string>
 	<!-- Только audio: режим voip обязывает использовать PushKit и CallKit,
 	     а их пока нет. Объявлять неиспользуемую возможность — повод для отказа.
 	     Вернуть voip вместе с реализацией входящих звонков. -->
