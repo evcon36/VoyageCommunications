@@ -1472,6 +1472,84 @@ export default function App() {
     setStatus('Вы вышли из приёмной');
   };
 
+  // ── Жалоба на участника ──
+  // Требование App Store для приложений, где люди общаются между собой
+  // (Guideline 1.2): человек должен уметь пожаловаться и перестать получать
+  // звонки от того, кто ему мешает.
+  const [reportTarget, setReportTarget] = useState(null);   // {identity, name}
+  const [reportReason, setReportReason] = useState('abuse');
+  const [reportNote, setReportNote] = useState('');
+  const [reportBusy, setReportBusy] = useState(false);
+
+  const sendReport = async () => {
+    if (!reportTarget) return;
+    setReportBusy(true);
+    try {
+      const resp = await apiFetch(`/moderation/report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Room-Token': roomTokenRef.current || '' },
+        body: JSON.stringify({
+          roomId: roomIdRef.current,
+          targetIdentity: reportTarget.identity,
+          targetName: reportTarget.name,
+          reason: reportReason,
+          note: reportNote.trim(),
+        }),
+      });
+      if (!resp.ok) {
+        const d = await resp.json().catch(() => ({}));
+        setStatus(d.message || 'Не удалось отправить жалобу');
+        return;
+      }
+      setStatus('Жалоба отправлена. Мы разберёмся в течение суток');
+      setReportTarget(null);
+      setReportNote('');
+    } catch {
+      setStatus('Не удалось отправить жалобу. Проверьте интернет');
+    } finally {
+      setReportBusy(false);
+    }
+  };
+
+  // ── Чёрный список ──
+  // Только между аккаунтами: у гостя нет постоянного имени, которое имело бы
+  // смысл запоминать, поэтому гостя из звонка убирает владелец комнаты.
+  const [blocks, setBlocks] = useState([]);
+
+  const fetchBlocks = useCallback(async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    try {
+      const r = await apiFetch(`/moderation/blocks`, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) setBlocks((await r.json()).blocks || []);
+    } catch { /* список необязателен для работы звонка */ }
+  }, []);
+
+  const blockUser = async (username) => {
+    const token = localStorage.getItem('token');
+    try {
+      const r = await apiFetch(`/moderation/block`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ username }),
+      });
+      setStatus(r.ok ? `${username} заблокирован. Звонки от него больше не придут` : 'Не удалось заблокировать');
+      if (r.ok) fetchBlocks();
+    } catch { setStatus('Не удалось заблокировать'); }
+  };
+
+  const unblockUser = async (username) => {
+    const token = localStorage.getItem('token');
+    try {
+      const r = await apiFetch(`/moderation/unblock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ username }),
+      });
+      if (r.ok) { setStatus(`${username} разблокирован`); fetchBlocks(); }
+    } catch { setStatus('Не удалось разблокировать'); }
+  };
+
   // кик участника (модерация, для владельца комнаты)
   const kickParticipant = async (identity) => {
     const token = localStorage.getItem('token');
@@ -1507,7 +1585,9 @@ export default function App() {
 
   useEffect(() => {
     if (isAccountPanelOpen && accountTab === 'rooms') fetchMyRooms();
-  }, [isAccountPanelOpen, accountTab, fetchMyRooms]);
+    // список заблокированных нужен на той же вкладке, где кнопка разблокировки
+    if (isAccountPanelOpen) fetchBlocks();
+  }, [isAccountPanelOpen, accountTab, fetchMyRooms, fetchBlocks]);
 
   const deleteRoom = async (slug) => {
     try {
@@ -3681,6 +3761,50 @@ export default function App() {
         </div>
       )}
 
+      {/* Жалоба на участника: требование App Store для приложений,
+          где люди общаются между собой (Guideline 1.2) */}
+      {reportTarget && (
+        <div className="report-backdrop" onClick={() => setReportTarget(null)}>
+          <div className="report-card" onClick={e => e.stopPropagation()}>
+            <div className="report-title">Пожаловаться на участника</div>
+            <div className="report-sub">{reportTarget.name}</div>
+
+            <div className="report-reasons">
+              {[
+                ['abuse', 'Оскорбления'],
+                ['nudity', 'Непристойное поведение'],
+                ['spam', 'Спам или реклама'],
+                ['threat', 'Угрозы'],
+                ['other', 'Другое'],
+              ].map(([id, label]) => (
+                <button
+                  key={id}
+                  className={`report-reason ${reportReason === id ? 'report-reason--on' : ''}`}
+                  onClick={() => setReportReason(id)}
+                >{label}</button>
+              ))}
+            </div>
+
+            <textarea
+              className="report-note"
+              placeholder="Что произошло (необязательно)"
+              maxLength={500}
+              value={reportNote}
+              onChange={e => setReportNote(e.target.value)}
+            />
+
+            <div className="report-hint">Мы разберём жалобу в течение суток.</div>
+
+            <div className="report-actions">
+              <button className="ghost-btn" onClick={() => setReportTarget(null)}>Отмена</button>
+              <button className="primary-btn" disabled={reportBusy} onClick={sendReport}>
+                {reportBusy ? 'Отправляем…' : 'Отправить'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Комната ожидания — панель допуска для ведущего */}
       {joined && waitingList.length > 0 && (
         <div className="waiting-admit">
@@ -3756,10 +3880,25 @@ export default function App() {
             {allParticipants.map(p => {
               const isLocal = p === livekitRoomRef.current?.localParticipant;
               const iAmHost = roomInfo?.isOwner;
+              // у гостя личность вида guest#xxxx: заблокировать его навсегда
+              // нельзя, при следующем входе он будет уже другим человеком
+              const isGuest = String(p.identity || '').startsWith('guest#');
               return (
                 <div className="participant-item" key={p.identity}>
                   <span className="participant-name">{displayName(p)}</span>
                   <span className="participant-actions-row">
+                    {!isLocal && (
+                      <button className="kick-btn" title="Пожаловаться на участника"
+                        onClick={() => { setReportTarget({ identity: p.identity, name: displayName(p) }); setReportReason('abuse'); }}>
+                        Пожаловаться
+                      </button>
+                    )}
+                    {!isLocal && !isGuest && authUser && (
+                      <button className="kick-btn" title="Больше не принимать от него звонки"
+                        onClick={() => blockUser(displayName(p))}>
+                        Заблокировать
+                      </button>
+                    )}
                     {iAmHost && !isLocal && (
                       <button className="kick-btn" title="Удалить из звонка" onClick={() => kickParticipant(p.identity)}>Удалить</button>
                     )}
@@ -4402,6 +4541,31 @@ export default function App() {
                 </div>
 
                 {/* Удаление аккаунта — обязательный пункт для App Store */}
+                {/* Кого человек заблокировал: без списка блокировка была бы
+                    ловушкой, снять её было бы негде */}
+                <div className="account-info-card" style={{ marginTop: 12 }}>
+                  <div className="account-info-row">
+                    <span>Заблокированные</span>
+                    <strong>{blocks.length}</strong>
+                  </div>
+                  {blocks.length === 0 ? (
+                    <p className="danger-zone-text" style={{ marginTop: 8 }}>
+                      Никого не заблокировали. Заблокировать человека можно в списке
+                      участников звонка, после этого его звонки к вам не придут.
+                    </p>
+                  ) : (
+                    <ul className="blocked-list">
+                      {blocks.map(b => (
+                        <li className="blocked-item" key={b.blocked}>
+                          <span>{b.blocked}</span>
+                          <button className="ghost-btn" style={{ height: 32, padding: '0 12px' }}
+                            onClick={() => unblockUser(b.blocked)}>Разблокировать</button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
                 <div className="danger-zone">
                   <div className="danger-zone-title">Удаление аккаунта</div>
                   {!delOpen ? (

@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { AccessToken, RoomServiceClient } = require('livekit-server-sdk');
 const authMiddleware = require('../middleware/auth.middleware');
 const prisma = require('../lib/prisma');
+const { callBlocked } = require('./moderation.routes');
 
 const router = express.Router();
 
@@ -195,6 +196,11 @@ router.post('/call', authMiddleware, async (req, res) => {
   try {
     const callee = String((req.body || {}).username || '').trim();
     if (!callee) return res.status(400).json({ message: 'username обязателен' });
+    // Комнату для звонка заблокированному человеку не заводим: иначе запрет
+    // обходится ссылкой, минуя проверку в сокете
+    if (await callBlocked(req.user.username, callee)) {
+      return res.status(403).json({ message: 'Сейчас недоступен' });
+    }
     const room = await prisma.room.create({
       data: {
         slug: makeSlug(),

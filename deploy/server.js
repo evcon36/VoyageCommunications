@@ -14,6 +14,7 @@ const prisma = require('./src/lib/prisma');
 const recTimeline = require('./src/lib/recTimeline');
 const { verifyToken } = require('./src/lib/jwt');
 const jwt = require('jsonwebtoken');
+const moderationRoutes = require('./src/routes/moderation.routes');
 
 const app = express();
 
@@ -262,11 +263,16 @@ io.on('connection', (socket) => {
   // «дозвон». Состояние живёт здесь, клиенты только отражают присланное —
   // иначе两 стороны расходятся и звонок зависает.
 
-  socket.on('call-start', ({ toUsername, roomSlug, inviteKey, fromName }) => {
+  socket.on('call-start', async ({ toUsername, roomSlug, inviteKey, fromName }) => {
     const from = socket.data.presenceUsername;
     const to = String(toUsername || '');
     if (!from || !to) return;
     if (from === to) return endToCaller(socket, 'self');
+
+    // Чёрный список работает в обе стороны: иначе заблокированный просто
+    // звонит сам и запрет ничего не значит. Причину не раскрываем: человеку
+    // незачем знать, заблокировали его или просто нет в сети.
+    if (await moderationRoutes.callBlocked(from, to)) return endToCaller(socket, 'unavailable');
 
     const targets = onlineUsers.get(to);
     if (!targets || targets.size === 0) return endToCaller(socket, 'unavailable');
@@ -514,6 +520,7 @@ app.use('/contacts', contactsRoutes);
 app.use('/internal', internalRoutes);
 // Вложения в чат звонка: картинки и файлы до 15 МБ
 app.use('/chat', require('./src/routes/chat.routes'));
+app.use('/moderation', moderationRoutes);
 app.get('/', (_, res) => res.send('Backend is running'));
 
 const PORT = process.env.PORT || 3001;
