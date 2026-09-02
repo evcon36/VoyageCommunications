@@ -51,3 +51,6 @@ client/android/capacitor-cordova-android-plugins/
 
 # Скачанные сборки Android
 *.apk
+
+# пароль демо-аккаунта для проверки Apple: в репозиторий не попадает
+demo-password.txt
