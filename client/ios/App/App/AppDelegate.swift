@@ -7,7 +7,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        // Не лениво: PushKit может разбудить приложение VoIP-пушем ещё до
+        // того, как пользователь его откроет — слушатель должен быть готов
+        // с самого запуска, а не заводиться где-то по требованию из JS.
+        VoipCallManager.shared.setup()
         return true
     }
 

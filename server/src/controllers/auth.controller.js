@@ -1,5 +1,6 @@
 // Communications auth — delegates to the unified accounts-api (common DB, shared JWT).
 const ACCOUNTS_API = process.env.ACCOUNTS_API || 'http://127.0.0.1:3005';
+const prisma = require('../lib/prisma');
 
 async function forward(path, payload) {
   const r = await fetch(ACCOUNTS_API + path, {
@@ -176,7 +177,28 @@ async function deletionPreview(req, res) {
   }
 }
 
+// ── VoIP push-токен (CallKit/PushKit) ──
+// Таблицы VoipPushToken нет в Prisma-схеме (как Report/UserBlock) — прямой SQL.
+async function registerVoipToken(req, res) {
+  try {
+    const { token, platform } = req.body || {};
+    if (!token) return res.status(400).json({ message: 'Нужен token' });
+    const username = req.user.username;
+    const plat = platform === 'ios' ? 'ios' : 'ios'; // пока только iOS
+    await prisma.$executeRaw`
+      INSERT INTO "VoipPushToken" (username, token, platform, "updatedAt")
+      VALUES (${username}, ${token}, ${plat}, now())
+      ON CONFLICT (username, platform)
+      DO UPDATE SET token = EXCLUDED.token, "updatedAt" = now()
+    `;
+    return res.status(200).json({ message: 'Токен сохранён' });
+  } catch (e) {
+    console.error('VOIP TOKEN ERROR:', e.message);
+    return res.status(500).json({ message: 'Ошибка сервера' });
+  }
+}
+
 module.exports = {
   register, login, twofaSend, twofaVerify, me, updateProfile, uploadAvatar, linkTelegram,
-  deleteAccount, restoreAccount, deletionPreview,
+  deleteAccount, restoreAccount, deletionPreview, registerVoipToken,
 };

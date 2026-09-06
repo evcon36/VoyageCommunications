@@ -63,3 +63,13 @@ export async function verify2fa(data) {
     body: JSON.stringify(data),
   });
 }
+
+// VoIP push-токен (CallKit/PushKit на iOS) — чтобы сервер мог разбудить
+// закрытое приложение на входящий звонок
+export async function registerVoipToken(token, deviceToken) {
+  return apiFetch('/auth/voip-token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ token: deviceToken, platform: 'ios' }),
+  });
+}

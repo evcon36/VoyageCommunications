@@ -15,6 +15,7 @@ const recTimeline = require('./src/lib/recTimeline');
 const { verifyToken } = require('./src/lib/jwt');
 const jwt = require('jsonwebtoken');
 const moderationRoutes = require('./src/routes/moderation.routes');
+const { sendVoipPush } = require('./src/lib/apns');
 
 const app = express();
 
@@ -177,6 +178,30 @@ async function endSession(socket) {
 // Отдельный пропуск заводить не стали: у того, кому вход разрешён, уже есть
 // токен медиасервера на эту самую комнату. Он подписан нашим ключом и внутри
 // несёт название комнаты, поэтому годится как доказательство права.
+// Будим закрытое приложение на iPhone VoIP-пушем, если у человека нет
+// активного сокета (сам звонок при этом уже стоит в activeCalls как ringing —
+// приложение проснётся, переподключится и получит call-incoming через
+// «досылку» в обработчике presence ниже).
+async function wakeViaVoip(username, call) {
+  try {
+    const rows = await prisma.$queryRaw`
+      SELECT token FROM "VoipPushToken" WHERE username = ${username} AND platform = 'ios'
+    `;
+    if (!rows || rows.length === 0) return;
+    const payload = {
+      aps: { 'content-available': 1 },
+      callId: call.callId,
+      from: call.from,
+      fromName: call.fromName,
+      roomSlug: call.roomSlug,
+      inviteKey: call.inviteKey,
+    };
+    await Promise.all(rows.map((r) => sendVoipPush(r.token, payload)));
+  } catch (e) {
+    console.error('wakeViaVoip error:', e.message);
+  }
+}
+
 function roomTokenOk(roomId, token) {
   const secret = process.env.LIVEKIT_API_SECRET;
   if (!secret || !token) return false;
@@ -256,6 +281,18 @@ io.on('connection', (socket) => {
     if (socket.data.presenceUsername) removePresence(socket.data.presenceUsername, socket.id);
     socket.data.presenceUsername = name;
     addPresence(name, socket.id);
+
+    // Приложение только что проснулось по VoIP-пушу и переподключилось —
+    // звонок мог всё это время стоять и звонить без единого живого сокета
+    // на стороне получателя. Досылаем call-incoming именно этому сокету.
+    for (const call of activeCalls.values()) {
+      if (call.to === name && call.state === 'ringing') {
+        socket.emit('call-incoming', {
+          callId: call.callId, from: call.from, fromName: call.fromName,
+          roomSlug: call.roomSlug, inviteKey: call.inviteKey,
+        });
+      }
+    }
   });
 
   // ── Звонок контакту ──
@@ -275,7 +312,13 @@ io.on('connection', (socket) => {
     if (await moderationRoutes.callBlocked(from, to)) return endToCaller(socket, 'unavailable');
 
     const targets = onlineUsers.get(to);
-    if (!targets || targets.size === 0) return endToCaller(socket, 'unavailable');
+    // Раньше отсутствие сокета сразу означало отказ. Теперь получатель может
+    // быть офлайн просто потому, что приложение закрыто на iPhone — в этом
+    // случае будим его VoIP-пушем (CallKit), а не отказываем сразу.
+    const hasVoipToken = await prisma.$queryRaw`
+      SELECT 1 FROM "VoipPushToken" WHERE username = ${to} AND platform = 'ios' LIMIT 1
+    `.then((r) => r.length > 0).catch(() => false);
+    if ((!targets || targets.size === 0) && !hasVoipToken) return endToCaller(socket, 'unavailable');
     // Звонящий тоже может быть занят: сидеть в другой комнате или уже кому-то
     // дозваниваться. Раньше проверялась только сторона получателя, и человек
     // из активного разговора мог начать второй звонок и попасть в две комнаты.
@@ -288,13 +331,17 @@ io.on('connection', (socket) => {
       // нужен, чтобы ответ ушёл именно тому устройству, с которого звонили
       fromSocketId: socket.id,
     };
-    call.timer = setTimeout(() => endCall(callId, 'timeout'), CALL_TIMEOUT_MS);
+    // Приложение, разбуженное пушем, поднимается не мгновенно — даём больше
+    // времени на дозвон, чем обычным 45 секундам с уже открытым приложением.
+    const timeoutMs = (!targets || targets.size === 0) ? CALL_TIMEOUT_MS + 15000 : CALL_TIMEOUT_MS;
+    call.timer = setTimeout(() => endCall(callId, 'timeout'), timeoutMs);
     activeCalls.set(callId, call);
 
-    for (const sid of targets) {
+    for (const sid of targets || []) {
       io.to(sid).emit('call-incoming', { callId, from, fromName: call.fromName, roomSlug, inviteKey });
     }
-    socket.emit('call-ringing', { callId, to, timeoutMs: CALL_TIMEOUT_MS });
+    if (!targets || targets.size === 0) wakeViaVoip(to, call);
+    socket.emit('call-ringing', { callId, to, timeoutMs });
   });
 
   socket.on('call-accept', ({ callId }) => {

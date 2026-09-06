@@ -8,7 +8,7 @@ import { serverUrl, apiFetch, mediaOrigin, onOriginChange, pickOrigin } from './
 import './App.css';
 import Icon from './Icons';
 import AuthPage from './components/AuthPage';
-import { getMe } from './services/auth';
+import { getMe, registerVoipToken } from './services/auth';
 import { getAltDomainUrl, ALT_DOMAIN_HINT, buildInviteLink } from './altDomain';
 
 const BASE = import.meta.env.VITE_BASE_PATH || '/communications/';
@@ -373,6 +373,11 @@ function RemoteAudio({ participant, volume = 1, localMuted = false }) {
 // вызовы просто ничего не делают.
 function callPlugin() {
   return window.Capacitor?.Plugins?.CallNotifier || null;
+}
+// CallKit/PushKit на iOS: будит закрытое приложение на входящий звонок,
+// показывает системный экран звонка на заблокированном телефоне.
+function voipPlugin() {
+  return window.Capacitor?.Plugins?.Voip || null;
 }
 function notifyIncoming(from) {
   window.comsDesktop?.incomingCall?.({ from });
@@ -1938,6 +1943,9 @@ export default function App() {
 
   const acceptCallRef = useRef(null);
   const declineCallRef = useRef(null);
+  // callId, на который уже ответили (или который уже сбросили) через
+  // системный экран звонка CallKit, пока JS ещё не был запущен
+  const pendingVoipRef = useRef(null);
 
   const acceptCall = async () => {
     const c = call;
@@ -2085,6 +2093,22 @@ export default function App() {
     });
 
     socket.on('call-incoming', (c) => {
+      // Приложение только что проснулось VoIP-пушем, и на экране блокировки
+      // уже нажали «Ответить»/«Сбросить» в CallKit — досылка call-incoming
+      // от сервера приходит уже после этого. Показывать баннер заново не
+      // нужно: сразу повторяем то же решение через обычную логику звонка.
+      const pending = pendingVoipRef.current;
+      if (pending && pending.callId === c.callId) {
+        pendingVoipRef.current = null;
+        setCall({
+          role: 'in', phase: 'ringing', callId: c.callId,
+          peer: c.from, peerName: c.fromName || c.from,
+          roomSlug: c.roomSlug, inviteKey: c.inviteKey,
+        });
+        if (pending.type === 'answered') acceptCallRef.current?.();
+        else declineCallRef.current?.();
+        return;
+      }
       setCall({
         role: 'in', phase: 'ringing', callId: c.callId,
         peer: c.from, peerName: c.fromName || c.from,
@@ -2181,6 +2205,52 @@ export default function App() {
     socket.on('connect', announce);
     socket.on('presence-rejected', rejected);
     return () => { socket.off('connect', announce); socket.off('presence-rejected', rejected); };
+  }, [authUser]);
+
+  // CallKit/PushKit (iOS): регистрируем VoIP-токен на сервере, чтобы он мог
+  // разбудить закрытое приложение пушем, и подхватываем решение, принятое
+  // прямо на экране блокировки (ответить/сбросить), пока JS ещё не работал.
+  useEffect(() => {
+    const plugin = voipPlugin();
+    if (!plugin) return;
+
+    const sendToken = (token) => {
+      if (!token || !authUser?.username) return;
+      const jwt = localStorage.getItem('token');
+      if (jwt) registerVoipToken(jwt, token).catch(() => { /* попробуем при следующем логине */ });
+    };
+
+    // Токен мог прийти от PushKit ещё до входа в аккаунт — спрашиваем сами,
+    // а не только ждём событие.
+    if (authUser?.username) {
+      plugin.getToken?.().then((r) => sendToken(r?.token)).catch(() => {});
+    }
+
+    const tokenSub = plugin.addListener?.('tokenUpdated', (data) => sendToken(data?.token));
+
+    // Ответ/сброс с экрана блокировки, случившийся, пока приложение уже
+    // работает (не только при холодном старте, см. ниже).
+    const applyPending = (type, callId) => {
+      const cur = callRef.current;
+      pendingVoipRef.current = { type, callId };
+      // Звонок уже отражён в состоянии (JS был жив) — решаем прямо сейчас,
+      // не дожидаясь досылки call-incoming.
+      if (cur && cur.callId === callId) {
+        pendingVoipRef.current = null;
+        if (type === 'answered') acceptCallRef.current?.();
+        else declineCallRef.current?.();
+      }
+    };
+    const answeredSub = plugin.addListener?.('callAnswered', (d) => applyPending('answered', d?.callId));
+    const endedSub = plugin.addListener?.('callEnded', (d) => applyPending('ended', d?.callId));
+
+    // Холодный старт: приложение подняли VoIP-пушем, решение на экране
+    // блокировки уже приняли до того, как этот код вообще выполнился.
+    plugin.getPendingCall?.().then((p) => {
+      if (p?.callId) pendingVoipRef.current = { type: p.type, callId: p.callId };
+    }).catch(() => {});
+
+    return () => { tokenSub?.remove?.(); answeredSub?.remove?.(); endedSub?.remove?.(); };
   }, [authUser]);
 
   // Переподключение сокета — это новый сокет с пустым состоянием на сервере.
