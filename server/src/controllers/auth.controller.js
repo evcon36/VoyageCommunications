@@ -1,145 +1,182 @@
-const bcrypt = require('bcrypt');
-const { z } = require('zod');
-const prisma = require('../lib/prisma');
-const { signToken } = require('../lib/jwt');
+// Communications auth — delegates to the unified accounts-api (common DB, shared JWT).
+const ACCOUNTS_API = process.env.ACCOUNTS_API || 'http://127.0.0.1:3005';
 
-const authSchema = z.object({
-  username: z
-    .string()
-    .min(3, 'Никнейм должен содержать минимум 3 символа')
-    .max(20, 'Никнейм должен содержать максимум 20 символов')
-    .regex(/^[a-zA-Zа-яА-Я0-9_]+$/, 'Допустимы только буквы, цифры и _'),
-  password: z
-    .string()
-    .min(6, 'Пароль должен содержать минимум 6 символов')
-    .max(100, 'Пароль слишком длинный'),
-});
+async function forward(path, payload) {
+  const r = await fetch(ACCOUNTS_API + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json().catch(() => ({}));
+  return { status: r.status, ok: r.ok, data };
+}
+
+// прокси с авторизацией пользователя (метод/тело как есть)
+async function forwardAuthed(req, path, method) {
+  const r = await fetch(ACCOUNTS_API + path, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: req.headers.authorization || '',
+    },
+    body: method === 'GET' ? undefined : JSON.stringify(req.body || {}),
+  });
+  const data = await r.json().catch(() => ({}));
+  return { status: r.status, data };
+}
+
+function shapeUser(u) {
+  return {
+    id: u.id,
+    username: u.username,
+    displayName: u.display_name || u.username,
+    avatarUrl: u.avatar_url || null,
+    email: u.email || null,
+    telegramLinked: Boolean(u.telegram_id),
+    telegramUsername: u.telegram_username || null,
+    walletAddress: u.wallet_address || null,
+    vocoBalance: u.voco_balance || 0,
+    createdAt: u.created_at,
+    // аккаунт помечен на удаление — клиент показывает экран восстановления
+    deletionRequestedAt: u.deletion_requested_at || null,
+    purgeAt: u.purge_at || null,
+  };
+}
 
 async function register(req, res) {
   try {
-    const parsed = authSchema.safeParse(req.body);
-
-    if (!parsed.success) {
-      return res.status(400).json({
-        message: 'Ошибка валидации',
-        errors: parsed.error.flatten(),
-      });
-    }
-
-    const { username, password } = parsed.data;
-
-    const existingUser = await prisma.user.findUnique({
-      where: { username },
-    });
-
-    if (existingUser) {
-      return res.status(409).json({
-        message: 'Такой никнейм уже существует',
-      });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 10);
-
-    const user = await prisma.user.create({
-      data: {
-        username,
-        passwordHash,
-      },
-    });
-
+    const { username, email, password } = req.body || {};
+    const { status, ok, data } = await forward('/register', { username, email, password });
+    if (!ok) return res.status(status).json(data);
     return res.status(201).json({
       message: 'Аккаунт успешно создан',
-      user: {
-        id: user.id,
-        username: user.username,
-      },
+      token: data.token,
+      user: shapeUser(data.user),
     });
-  } catch (error) {
-    console.error('REGISTER ERROR:', error);
-    return res.status(500).json({
-      message: 'Ошибка сервера при регистрации',
-    });
+  } catch (e) {
+    console.error('REGISTER PROXY ERROR:', e.message);
+    return res.status(500).json({ message: 'Ошибка сервера при регистрации' });
   }
 }
 
 async function login(req, res) {
   try {
-    const parsed = authSchema.safeParse(req.body);
-
-    if (!parsed.success) {
-      return res.status(400).json({
-        message: 'Ошибка валидации',
-        errors: parsed.error.flatten(),
-      });
+    const { username, password, device_token } = req.body || {};
+    const { status, ok, data } = await forward('/login', { identifier: username, password, device_token });
+    if (!ok) return res.status(status).json(data);
+    // Аккаунт с 2FA: accounts-api отдаёт twofa_required (200, БЕЗ user). Не зовём shapeUser —
+    // прокидываем клиенту, чтобы он показал шаг ввода кода.
+    if (data.twofa_required) {
+      return res.status(200).json({ twofa_required: true, methods: data.methods || [], pending: data.pending });
     }
-
-    const { username, password } = parsed.data;
-
-    const user = await prisma.user.findUnique({
-      where: { username },
-    });
-
-    if (!user) {
-      return res.status(401).json({
-        message: 'Неверный логин или пароль',
-      });
-    }
-
-    const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
-
-    if (!isPasswordValid) {
-      return res.status(401).json({
-        message: 'Неверный логин или пароль',
-      });
-    }
-
-    const token = signToken(user);
-
     return res.status(200).json({
       message: 'Вход выполнен успешно',
-      token,
-      user: {
-        id: user.id,
-        username: user.username,
-      },
+      token: data.token,
+      user: shapeUser(data.user),
     });
-  } catch (error) {
-    console.error('LOGIN ERROR:', error);
-    return res.status(500).json({
-      message: 'Ошибка сервера при входе',
+  } catch (e) {
+    console.error('LOGIN PROXY ERROR:', e.message);
+    return res.status(500).json({ message: 'Ошибка сервера при входе' });
+  }
+}
+
+// Отправка кода 2FA на выбранный канал (email/telegram) во время челленджа входа
+async function twofaSend(req, res) {
+  try {
+    const { pending, channel } = req.body || {};
+    const { status, data } = await forward('/2fa/challenge/send', { pending, channel });
+    return res.status(status).json(data);
+  } catch (e) {
+    console.error('2FA SEND PROXY ERROR:', e.message);
+    return res.status(500).json({ message: 'Не удалось отправить код' });
+  }
+}
+
+// Проверка кода 2FA → выдаёт токен + пользователя
+async function twofaVerify(req, res) {
+  try {
+    const { pending, method, code, remember } = req.body || {};
+    const { status, ok, data } = await forward('/2fa/verify', { pending, method, code, remember });
+    if (!ok) return res.status(status).json(data);
+    return res.status(200).json({
+      message: 'Вход выполнен успешно',
+      token: data.token,
+      user: shapeUser(data.user),
+      device_token: data.device_token || null,
     });
+  } catch (e) {
+    console.error('2FA VERIFY PROXY ERROR:', e.message);
+    return res.status(500).json({ message: 'Ошибка сервера при проверке кода' });
   }
 }
 
 async function me(req, res) {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-      select: {
-        id: true,
-        username: true,
-        createdAt: true,
-      },
-    });
+    const { status, data } = await forwardAuthed(req, '/me', 'GET');
+    if (status !== 200) return res.status(status).json(data);
+    return res.status(200).json({ user: shapeUser(data.user) });
+  } catch (e) {
+    return res.status(500).json({ message: 'Ошибка сервера' });
+  }
+}
 
-    if (!user) {
-      return res.status(404).json({
-        message: 'Пользователь не найден',
-      });
-    }
+async function updateProfile(req, res) {
+  try {
+    const { status, data } = await forwardAuthed(req, '/profile', 'PATCH');
+    return res.status(status).json(data);
+  } catch (e) {
+    return res.status(500).json({ message: 'Ошибка сервера' });
+  }
+}
 
-    return res.status(200).json({
-      user,
-    });
-  } catch (error) {
-    return res.status(500).json({
-      message: 'Ошибка сервера',
-    });
+async function uploadAvatar(req, res) {
+  try {
+    const { status, data } = await forwardAuthed(req, '/avatar', 'POST');
+    return res.status(status).json(data);
+  } catch (e) {
+    return res.status(500).json({ message: 'Ошибка сервера' });
+  }
+}
+
+async function linkTelegram(req, res) {
+  try {
+    const { status, data } = await forwardAuthed(req, '/link-telegram', 'POST');
+    return res.status(status).json(data);
+  } catch (e) {
+    return res.status(500).json({ message: 'Ошибка сервера' });
+  }
+}
+
+// ── Удаление аккаунта (App Store, Guideline 5.1.1(v)) ──
+// Сам аккаунт живёт в accounts-api, поэтому просто пробрасываем запрос туда.
+async function deleteAccount(req, res) {
+  try {
+    const { status, data } = await forwardAuthed(req, '/account/delete', 'POST');
+    return res.status(status).json(data);
+  } catch (e) {
+    return res.status(500).json({ message: 'Ошибка сервера' });
+  }
+}
+
+async function restoreAccount(req, res) {
+  try {
+    const { status, data } = await forwardAuthed(req, '/account/restore', 'POST');
+    return res.status(status).json(data);
+  } catch (e) {
+    return res.status(500).json({ message: 'Ошибка сервера' });
+  }
+}
+
+async function deletionPreview(req, res) {
+  try {
+    const { status, data } = await forwardAuthed(req, '/account/deletion-preview', 'GET');
+    return res.status(status).json(data);
+  } catch (e) {
+    return res.status(500).json({ message: 'Ошибка сервера' });
   }
 }
 
 module.exports = {
-  register,
-  login,
-  me,
+  register, login, twofaSend, twofaVerify, me, updateProfile, uploadAvatar, linkTelegram,
+  deleteAccount, restoreAccount, deletionPreview,
 };

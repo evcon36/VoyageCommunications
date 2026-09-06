@@ -54,3 +54,6 @@ client/android/capacitor-cordova-android-plugins/
 
 # пароль демо-аккаунта для проверки Apple: в репозиторий не попадает
 demo-password.txt
+
+# APNs-ключ (.p8) для push-уведомлений о звонках — секрет, не в git
+server/certs/

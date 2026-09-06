@@ -7,9 +7,149 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Legacy-таблица времён локальной авторизации. Аккаунты живут в accounts-api;
+// таблица сохранена ради исторических данных, к ней ничего не пишется.
 model User {
   id           String   @id @default(cuid())
   username     String   @unique
   passwordHash String
   createdAt    DateTime @default(now())
+}
+
+// userId — id из общей базы accounts (accounts-api), без FK на локальный User.
+model CallSession {
+  id       String    @id @default(cuid())
+  userId   String
+  userName String?   // ник участника (для аналитики по сотрудникам)
+  roomId   String
+  joinedAt DateTime  @default(now())
+  leftAt   DateTime?
+  duration Int?
+
+  @@index([roomId])
+}
+
+model Room {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  ownerId   String
+  ownerName String
+  isPrivate   Boolean  @default(false)
+  waitingRoom Boolean  @default(false)
+  muteOnJoin  Boolean  @default(false)
+  companyId   String?
+  members     String[] @default([])
+  inviteKey String?
+  createdAt DateTime @default(now())
+
+  // Комната, созданная без аккаунта. Признак ставится при создании и больше
+  // не меняется: вход человека с аккаунтом лимит не снимает, иначе обойти
+  // ограничение можно было бы, просто позвав знакомого.
+  isGuestRoom Boolean   @default(false)
+  // Срок живёт в базе, а не в памяти процесса: таймер в памяти не переживает
+  // перезапуск, и гостевые комнаты становились бы вечными после деплоя.
+  expiresAt   DateTime?
+  maxPeers    Int?
+}
+
+// Контакты: у каждого пользователя свой список (contactUsername — ник из общей базы accounts)
+model Contact {
+  id              String   @id @default(cuid())
+  ownerId         String
+  contactUsername String
+  createdAt       DateTime @default(now())
+
+  @@unique([ownerId, contactUsername])
+}
+
+// Записи звонков (LiveKit Egress -> mp4 в /var/www/voyage/recordings)
+model Recording {
+  id               String    @id @default(cuid())
+  egressId         String    @unique
+  roomId           String
+  startedBy        String
+  fileName         String?
+  status           String    @default("active") // active | done | failed
+  startedAt        DateTime  @default(now())
+  endedAt          DateTime?
+  transcriptStatus String    @default("none") // none | processing | done | failed
+  transcript       Json?     // оригинал [{start,end,speaker,text}]
+  transcriptAi     Json?     // версия, улучшенная ИИ
+  aiStatus         String    @default("none") // none | processing | done | failed
+  summary          String?   // ИИ-саммари звонка (текст)
+  summaryStatus    String    @default("none") // none | processing | done | failed
+  speakerLog       Json?     // [{t,speaker}] таймлайн активных говорящих
+}
+
+// ── Бизнес: компании внутри Voyage ──
+model Company {
+  id        String          @id @default(cuid())
+  slug      String          @unique
+  name      String
+  ownerId   String          // id из общей базы accounts
+  ownerName String
+  accent    String          @default("#f5d565") // фирменный цвет компании
+  plan      String          @default("free")
+  logo               String?
+  defaultWaitingRoom Boolean      @default(false)
+  defaultMuteOnJoin  Boolean      @default(false)
+  recordPolicy       String       @default("anyone")  // owner | admin | anyone
+  whoCanCreateRooms  String       @default("anyone")  // admin | anyone
+  guestAccess        Boolean      @default(true)
+  createdAt DateTime        @default(now())
+  members     CompanyMember[]
+  departments Department[]
+}
+
+// Отделы/команды внутри компании
+model Department {
+  id        String          @id @default(cuid())
+  companyId String
+  company   Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name      String
+  head      String?         // ник руководителя отдела
+  createdAt DateTime        @default(now())
+  members   CompanyMember[]
+
+  @@index([companyId])
+}
+
+model CompanyMember {
+  id           String      @id @default(cuid())
+  companyId    String
+  company      Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  username     String      // ник из accounts
+  role         String      @default("member") // owner | admin | member
+  title        String?     // должность
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  createdAt    DateTime    @default(now())
+
+  @@unique([companyId, username])
+  @@index([departmentId])
+}
+
+model CompanyAudit {
+  id        String   @id @default(cuid())
+  companyId String
+  actor     String
+  action    String
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+}
+
+model Meeting {
+  id          String   @id @default(cuid())
+  companyId   String
+  title       String
+  roomSlug    String
+  inviteKey   String
+  scheduledAt DateTime
+  createdBy   String
+  createdAt   DateTime @default(now())
+
+  @@index([companyId])
 }
