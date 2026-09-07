@@ -1954,27 +1954,32 @@ export default function App() {
   // системный экран звонка CallKit, пока JS ещё не был запущен
   const pendingVoipRef = useRef(null);
 
-  const acceptCall = async () => {
-    const c = call;
+  // Звонок можно передать явно. Без этого приём звонка, начатый сразу после
+  // setCall (например, когда на экране блокировки уже нажали «Ответить»),
+  // молча ничего не делал: в замыкании этой функции лежало ещё старое
+  // состояние, где звонка нет, и она выходила на первой же проверке.
+  // Кнопки передают сюда событие нажатия, а не звонок, поэтому явный звонок
+  // распознаём по наличию номера: иначе объект события принимался за звонок
+  // и приём молча не срабатывал.
+  const acceptCall = async (explicit) => {
+    const c = explicit?.callId ? explicit : call;
     if (!c || c.role !== 'in') return;
     // В комнату входим не здесь, а по разрешению сервера (call-accept-ok).
     // Раньше клиент входил сразу, и при ответе с двух устройств оба
     // оказывались в комнате: отказ приходил уже после входа.
     socket.emit('call-accept', { callId: c.callId });
     clearIncomingNotice();
-    // Ответили внутри приложения — системный экран звонка больше не нужен,
-    // сам разговор идёт в веб-слое.
-    if (c.callId) voipPlugin()?.endCall?.({ callId: c.callId }).catch(() => {});
     // Обязательно выйти из текущего звонка: иначе микрофон остаётся в старой
     // комнате и прежние собеседники продолжают нас слышать.
     if (joined) await leaveCall();
     setCall({ ...c, phase: 'connecting' });
   };
 
-  const declineCall = () => {
-    if (call?.callId) {
-      socket.emit('call-decline', { callId: call.callId });
-      voipPlugin()?.endCall?.({ callId: call.callId }).catch(() => {});
+  const declineCall = (explicit) => {
+    const c = explicit?.callId ? explicit : call;
+    if (c?.callId) {
+      socket.emit('call-decline', { callId: c.callId });
+      voipPlugin()?.endCall?.({ callId: c.callId }).catch(() => {});
     }
     setCall(null);
     clearIncomingNotice();
@@ -2110,16 +2115,22 @@ export default function App() {
       // уже нажали «Ответить»/«Сбросить» в CallKit — досылка call-incoming
       // от сервера приходит уже после этого. Показывать баннер заново не
       // нужно: сразу повторяем то же решение через обычную логику звонка.
+      // Пустой номер означает: на экране блокировки ответили, но приложение
+      // к тому моменту уже выгрузилось и связь с конкретным звонком
+      // потерялась. Тогда решение применяем к тому звонку, который пришёл.
       const pending = pendingVoipRef.current;
-      if (pending && pending.callId === c.callId) {
+      if (pending && (pending.callId === c.callId || !pending.callId)) {
         pendingVoipRef.current = null;
-        setCall({
+        const incoming = {
           role: 'in', phase: 'ringing', callId: c.callId,
           peer: c.from, peerName: c.fromName || c.from,
           roomSlug: c.roomSlug, inviteKey: c.inviteKey,
-        });
-        if (pending.type === 'answered') acceptCallRef.current?.();
-        else declineCallRef.current?.();
+        };
+        setCall(incoming);
+        // Звонок передаём явно: состояние ещё не успело обновиться, и без
+        // этого приём звонка молча не срабатывал.
+        if (pending.type === 'answered') acceptCallRef.current?.(incoming);
+        else declineCallRef.current?.(incoming);
         return;
       }
       setCall({
@@ -2146,10 +2157,14 @@ export default function App() {
       joinRoomWithRef.current?.(roomSlug, inviteKey, { direct: true });
     });
     // Сервер разрешил нам принять звонок — только теперь входим
-    socket.on('call-accept-ok', ({ roomSlug, inviteKey }) => {
+    socket.on('call-accept-ok', ({ callId, roomSlug, inviteKey }) => {
       inviteKeyRef.current = inviteKey;
       setRoomId(roomSlug);
       joinRoomWithRef.current?.(roomSlug, inviteKey, { direct: true });
+      // Гасим системный экран звонка только теперь, когда разговор реально
+      // начинается. Если гасить сразу при ответе, телефон успевает показать
+      // «сбой вызова» — звонок для системы кончился, ещё не начавшись.
+      if (callId) voipPlugin()?.endCall?.({ callId }).catch(() => {});
     });
     socket.on('call-ended', ({ callId, reason }) => {
       setCall(null);
@@ -2289,8 +2304,8 @@ export default function App() {
       // не дожидаясь досылки call-incoming.
       if (cur && cur.callId === callId) {
         pendingVoipRef.current = null;
-        if (type === 'answered') acceptCallRef.current?.();
-        else declineCallRef.current?.();
+        if (type === 'answered') acceptCallRef.current?.(cur);
+        else declineCallRef.current?.(cur);
       }
     };
     const answeredSub = VoipNative.addListener?.('callAnswered', (d) => applyPending('answered', d?.callId));

@@ -116,17 +116,22 @@ extension VoipCallManager: CXProviderDelegate {
         uuidByCallId.removeAll()
     }
 
+    // Если приложение успело выгрузиться между пушем и ответом, связь с
+    // нашим номером звонка теряется. Раньше в этом случае действие
+    // отклонялось и телефон показывал «сбой вызова». Теперь отвечаем всё
+    // равно, с пустым номером: веб-слой примет тот звонок, который ему
+    // придёт от сервера.
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
-        guard let callId = callUUIDs[action.callUUID] else { return action.fail() }
+        let callId = callUUIDs[action.callUUID] ?? ""
         pendingCall = ["type": "answered", "callId": callId]
         post(.voipCallAnswered, ["callId": callId])
         action.fulfill()
     }
 
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
-        guard let callId = callUUIDs[action.callUUID] else { return action.fail() }
+        let callId = callUUIDs[action.callUUID] ?? ""
         callUUIDs.removeValue(forKey: action.callUUID)
-        uuidByCallId.removeValue(forKey: callId)
+        if !callId.isEmpty { uuidByCallId.removeValue(forKey: callId) }
         pendingCall = ["type": "ended", "callId": callId]
         post(.voipCallEnded, ["callId": callId])
         action.fulfill()
