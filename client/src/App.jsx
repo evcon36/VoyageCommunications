@@ -2225,6 +2225,25 @@ export default function App() {
     };
   }, [addAction, showFloatingReaction]);
 
+  // Открыто ли приложение на экране. От этого зависит, слать ли пуш: открытое
+  // приложение показывает входящий звонок само, и системный экран звонка
+  // поверх него означал бы один звонок, показанный дважды.
+  useEffect(() => {
+    const report = () => socket.emit('app-state', { active: document.visibilityState === 'visible' });
+    report();
+    document.addEventListener('visibilitychange', report);
+    socket.on('connect', report);
+    // Подтверждаем регулярно: приложение, закрытое прямо с экрана, ничего
+    // сообщить уже не успеет, и без обновления сервер продолжал бы считать
+    // его открытым — а значит, не будил бы телефон звонком.
+    const beat = setInterval(report, 20000);
+    return () => {
+      clearInterval(beat);
+      document.removeEventListener('visibilitychange', report);
+      socket.off('connect', report);
+    };
+  }, []);
+
   // Сообщаем серверу, кто мы — для входящих звонков (и после переподключений)
   useEffect(() => {
     if (!authUser?.username) return;
@@ -2299,28 +2318,41 @@ export default function App() {
     // работает (не только при холодном старте, см. ниже).
     const applyPending = (type, callId) => {
       const cur = callRef.current;
-      pendingVoipRef.current = { type, callId };
-      // Звонок уже отражён в состоянии (JS был жив) — решаем прямо сейчас,
-      // не дожидаясь досылки call-incoming.
-      if (cur && cur.callId === callId) {
+      // Пустой номер означает, что связь с конкретным звонком потерялась
+      // (приложение выгружалось) — тогда решение применяем к тому звонку,
+      // который сейчас звонит.
+      const matches = cur && cur.phase === 'ringing' && (!callId || cur.callId === callId);
+      if (matches) {
         pendingVoipRef.current = null;
         if (type === 'answered') acceptCallRef.current?.(cur);
         else declineCallRef.current?.(cur);
+        return;
       }
+      // Звонка в состоянии ещё нет — запомним решение до его прихода.
+      pendingVoipRef.current = { type, callId };
     };
     const answeredSub = VoipNative.addListener?.('callAnswered', (d) => applyPending('answered', d?.callId));
     const endedSub = VoipNative.addListener?.('callEnded', (d) => applyPending('ended', d?.callId));
 
-    // Холодный старт: приложение подняли VoIP-пушем, решение на экране
-    // блокировки уже приняли до того, как этот код вообще выполнился.
-    VoipNative.getPendingCall?.().then((p) => {
-      if (p?.callId) pendingVoipRef.current = { type: p.type, callId: p.callId };
-    }).catch(() => {});
+    // Решение, принятое на системном экране звонка, пока веб-слой спал.
+    // Проверяем и при старте, и при каждом возвращении на экран: событие
+    // из нативной части до усыплённого приложения не доходит, и без этой
+    // проверки после ответа с экрана блокировки приходилось нажимать
+    // «Принять» ещё раз уже внутри приложения.
+    const checkPending = () => {
+      VoipNative.getPendingCall?.().then((p) => {
+        if (p?.type) applyPending(p.type, p.callId || '');
+      }).catch(() => {});
+    };
+    checkPending();
+    const onVisible = () => { if (document.visibilityState === 'visible') checkPending(); };
+    document.addEventListener('visibilitychange', onVisible);
 
     // addListener отдаёт обещание, а не сам обработчик: без ожидания
     // отписаться было невозможно и слушатели копились при каждом входе.
     return () => {
       stopped = true;
+      document.removeEventListener('visibilitychange', onVisible);
       Promise.resolve(tokenSub).then((s) => s?.remove?.()).catch(() => {});
       Promise.resolve(answeredSub).then((s) => s?.remove?.()).catch(() => {});
       Promise.resolve(endedSub).then((s) => s?.remove?.()).catch(() => {});

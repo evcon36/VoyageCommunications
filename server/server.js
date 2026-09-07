@@ -102,6 +102,23 @@ function emitTo(username, event, payload) {
 // Занят, если уже в комнате или в процессе другого звонка.
 // Без этой проверки второй входящий молча перезатирал первый, и человек
 // принимал звонок от одного, а попадал в комнату к другому.
+// Открыто ли приложение прямо сейчас на экране. Свёрнутое приложение держит
+// соединение живым, но показать входящий звонок не может — поэтому «есть
+// соединение» и «человек видит экран» это разные вещи, и различить их может
+// только сам клиент.
+// Признак живой, только пока подтверждается. Приложение, закрытое прямо с
+// экрана, оставляет после себя соединение, которое сервер считает живым ещё
+// с полминуты — и если верить его последнему «я открыто», звонок не разбудит
+// телефон вообще. Поэтому отметка стареет.
+const FOREGROUND_TTL_MS = 45000;
+function isForeground(username) {
+  for (const sid of onlineUsers.get(username) || []) {
+    const d = io.sockets.sockets.get(sid)?.data;
+    if (d?.foreground && Date.now() - (d.foregroundAt || 0) < FOREGROUND_TTL_MS) return true;
+  }
+  return false;
+}
+
 function isBusy(username) {
   for (const sid of onlineUsers.get(username) || []) {
     if (io.sockets.sockets.get(sid)?.data?.roomId) return true;
@@ -130,7 +147,11 @@ function endCallsOf(username) {
   if (!username) return;
   for (const [id, c] of activeCalls) {
     if (c.from === username) endCall(id, 'cancelled');
-    else if (c.to === username) endCall(id, 'unavailable');
+    // Звонок, разбудивший телефон пушем, обрывать нельзя. Закрытое
+    // приложение как раз в этот момент поднимается, и его старое соединение
+    // отваливается — раньше это убивало звонок через долю секунды после
+    // начала, и человек на другом конце видел мгновенный сброс.
+    else if (c.to === username && !c.awaitingPush) endCall(id, 'unavailable');
   }
 }
 
@@ -295,6 +316,13 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Приложение открыто на экране или свёрнуто. Сообщает сам клиент: со
+  // стороны сервера свёрнутое и открытое приложение выглядят одинаково.
+  socket.on('app-state', ({ active }) => {
+    socket.data.foreground = Boolean(active);
+    socket.data.foregroundAt = Date.now();
+  });
+
   // ── Звонок контакту ──
   // Звонящий НЕ входит в комнату, пока не ответили: до этого он в состоянии
   // «дозвон». Состояние живёт здесь, клиенты только отражают присланное —
@@ -340,11 +368,14 @@ io.on('connection', (socket) => {
     for (const sid of targets || []) {
       io.to(sid).emit('call-incoming', { callId, from, fromName: call.fromName, roomSlug, inviteKey });
     }
-    // Пуш уходит всегда, когда телефон зарегистрирован, а не только когда
-    // сокета нет вовсе. Свёрнутое приложение держит сокет живым, но система
-    // его усыпляет: событие доходит, а показать входящий звонок некому.
-    // Системный экран звонка появляется только от VoIP-пуша через CallKit.
-    if (hasVoipToken) wakeViaVoip(to, call);
+    // Пуш нужен, когда приложение не на экране: свёрнутое держит соединение
+    // живым, но система его усыпляет, и показать звонок некому. А вот когда
+    // приложение открыто, пуш только мешает — поверх него появляется ещё и
+    // системный экран звонка, и человек видит один звонок дважды.
+    if (hasVoipToken && !isForeground(to)) {
+      call.awaitingPush = true;
+      wakeViaVoip(to, call);
+    }
     socket.emit('call-ringing', { callId, to, timeoutMs });
   });
 
