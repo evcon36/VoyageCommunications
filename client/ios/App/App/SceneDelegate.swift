@@ -8,7 +8,11 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else { return }
 
         window = UIWindow(windowScene: windowScene)
-        window?.rootViewController = CAPBridgeViewController()
+        // Именно здесь создаётся главный экран, а не в сториборде. Пока тут
+        // стоял голый CAPBridgeViewController, наш MainViewController не
+        // создавался никогда — а значит, и плагин звонков не регистрировался,
+        // сколько бы правок ни вносилось в сториборд.
+        window?.rootViewController = MainViewController()
         window?.makeKeyAndVisible()
 
         SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)

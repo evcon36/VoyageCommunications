@@ -2228,8 +2228,7 @@ export default function App() {
   // разбудить закрытое приложение пушем, и подхватываем решение, принятое
   // прямо на экране блокировки (ответить/сбросить), пока JS ещё не работал.
   useEffect(() => {
-    if (!IS_IOS_APP || !authUser?.username) return;
-    const plugin = voipPlugin();
+    if (!authUser?.username) return;
 
     const sendToken = (token, diag) => {
       const jwt = localStorage.getItem('token');
@@ -2237,24 +2236,31 @@ export default function App() {
       registerVoipToken(jwt, token, diag).catch(() => { /* повторим при следующем входе */ });
     };
 
-    // Плагина нет — сообщаем об этом серверу и выходим. Молчаливый выход
-    // раньше делал причину «токен не доехал» неотличимой от «пуш не дошёл»:
-    // на сервере не оставалось вообще никакого следа.
-    if (!plugin) {
-      sendToken('', 'plugin-missing');
-      return;
-    }
-
-    // PushKit отдаёт токен через доли секунды после старта приложения, но
-    // веб-слой к этому моменту ещё не загружен, и событие о токене улетает
-    // в пустоту. Поэтому спрашиваем сами и с повторами, а не надеемся на
-    // событие: без этого токен не регистрировался вообще никогда.
-    // Что нативная сторона объявила мосту. Если Voip здесь нет — значит
-    // плагин не зарегистрировался в самом приложении, и дело не в JS.
-    const nativeHeaders = () => {
-      try { return (window.Capacitor?.PluginHeaders || []).map(h => h.name).join('/') || 'пусто'; }
-      catch { return 'недоступно'; }
+    // Состояние моста словами. Прошлый раз условие «только для iOS» молча
+    // выключило весь блок целиком, и на сервере не осталось ни следа —
+    // поэтому теперь ничего не выключаем по условию, а сообщаем как есть.
+    const state = () => {
+      const cap = window.Capacitor;
+      let platform = 'нет', headers = 'нет';
+      try { platform = cap?.getPlatform?.() || 'нет'; } catch { platform = 'ошибка'; }
+      try { headers = (cap?.PluginHeaders || []).map(h => h.name).join('/') || 'пусто'; } catch { headers = 'ошибка'; }
+      return `platform=${platform} headers=${headers}`;
     };
+
+    // Первый отчёт уходит сразу, до любых обращений к плагину: если вызов
+    // плагина зависнет, мы всё равно будем знать, что видит приложение.
+    sendToken('', `старт ${state()}`);
+
+    if (!IS_IOS_APP) return;
+
+    // PushKit отдаёт токен через доли секунды после старта приложения, когда
+    // веб-слой ещё не загружен, и событие о токене улетает в пустоту.
+    // Поэтому спрашиваем сами и с повторами. Каждую попытку ограничиваем по
+    // времени: зависший вызов плагина иначе останавливает весь цикл молча.
+    const withTimeout = (p, ms) => Promise.race([
+      p,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('таймаут вызова плагина')), ms)),
+    ]);
 
     let stopped = false;
     let attempts = 0;
@@ -2262,15 +2268,15 @@ export default function App() {
     const askToken = async () => {
       if (stopped) return;
       let token = null;
-      try { token = (await plugin.getToken())?.token || null; }
-      catch (e) { lastErr = String(e?.message || e).slice(0, 100); }
-      if (token) return sendToken(token, 'ok');
-      if (++attempts >= 20) return sendToken('', `no-token err=${lastErr || 'нет'} headers=${nativeHeaders()}`);
+      try { token = (await withTimeout(VoipNative.getToken(), 3000))?.token || null; }
+      catch (e) { lastErr = String(e?.message || e).slice(0, 80); }
+      if (token) return sendToken(token, `ok ${state()}`);
+      if (++attempts >= 12) return sendToken('', `нет токена err=${lastErr || 'нет'} ${state()}`);
       setTimeout(askToken, 1500);
     };
     askToken();
 
-    const tokenSub = plugin.addListener?.('tokenUpdated', (data) => {
+    const tokenSub = VoipNative.addListener?.('tokenUpdated', (data) => {
       if (data?.token) { stopped = true; sendToken(data.token, 'event'); }
     });
 
@@ -2287,12 +2293,12 @@ export default function App() {
         else declineCallRef.current?.();
       }
     };
-    const answeredSub = plugin.addListener?.('callAnswered', (d) => applyPending('answered', d?.callId));
-    const endedSub = plugin.addListener?.('callEnded', (d) => applyPending('ended', d?.callId));
+    const answeredSub = VoipNative.addListener?.('callAnswered', (d) => applyPending('answered', d?.callId));
+    const endedSub = VoipNative.addListener?.('callEnded', (d) => applyPending('ended', d?.callId));
 
     // Холодный старт: приложение подняли VoIP-пушем, решение на экране
     // блокировки уже приняли до того, как этот код вообще выполнился.
-    plugin.getPendingCall?.().then((p) => {
+    VoipNative.getPendingCall?.().then((p) => {
       if (p?.callId) pendingVoipRef.current = { type: p.type, callId: p.callId };
     }).catch(() => {});
 
