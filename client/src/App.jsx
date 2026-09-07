@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { io } from 'socket.io-client';
+import { registerPlugin } from '@capacitor/core';
 import { LK, loadLiveKit, prefetchLiveKit } from './livekit';
 import { serverUrl, apiFetch, mediaOrigin, onOriginChange, pickOrigin } from './net';
 // @livekit/track-processors загружается лениво при включении размытия —
@@ -376,8 +377,14 @@ function callPlugin() {
 }
 // CallKit/PushKit на iOS: будит закрытое приложение на входящий звонок,
 // показывает системный экран звонка на заблокированном телефоне.
+//
+// Через window.Capacitor.Plugins плагин НЕ виден: это способ времён
+// Capacitor 2, и на живом устройстве он молча отдавал пустоту — токен из-за
+// этого не регистрировался вообще никогда. Свои плагины объявляются только
+// так, через registerPlugin.
+const VoipNative = registerPlugin('Voip');
 function voipPlugin() {
-  return window.Capacitor?.Plugins?.Voip || null;
+  return IS_IOS_APP ? VoipNative : null;
 }
 function notifyIncoming(from) {
   window.comsDesktop?.incomingCall?.({ from });
@@ -2242,14 +2249,23 @@ export default function App() {
     // веб-слой к этому моменту ещё не загружен, и событие о токене улетает
     // в пустоту. Поэтому спрашиваем сами и с повторами, а не надеемся на
     // событие: без этого токен не регистрировался вообще никогда.
+    // Что нативная сторона объявила мосту. Если Voip здесь нет — значит
+    // плагин не зарегистрировался в самом приложении, и дело не в JS.
+    const nativeHeaders = () => {
+      try { return (window.Capacitor?.PluginHeaders || []).map(h => h.name).join('/') || 'пусто'; }
+      catch { return 'недоступно'; }
+    };
+
     let stopped = false;
     let attempts = 0;
+    let lastErr = '';
     const askToken = async () => {
       if (stopped) return;
       let token = null;
-      try { token = (await plugin.getToken())?.token || null; } catch { /* повторим */ }
+      try { token = (await plugin.getToken())?.token || null; }
+      catch (e) { lastErr = String(e?.message || e).slice(0, 100); }
       if (token) return sendToken(token, 'ok');
-      if (++attempts >= 20) return sendToken('', 'no-token-after-retries');
+      if (++attempts >= 20) return sendToken('', `no-token err=${lastErr || 'нет'} headers=${nativeHeaders()}`);
       setTimeout(askToken, 1500);
     };
     askToken();
