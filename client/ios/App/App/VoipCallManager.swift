@@ -20,9 +20,18 @@ final class VoipCallManager: NSObject {
     private(set) var deviceTokenHex: String?
 
     // JS может ещё не быть готов (приложение только что разбудили пушем) —
-    // кладём событие сюда, плагин отдаст его, как только React смонтируется
-    // и спросит через getPendingCall().
-    private var pendingCall: [String: Any]?
+    // кладём решение сюда, плагин отдаст его, как только React смонтируется
+    // и спросит через getPendingCall(). Хранится на диске, а не в памяти:
+    // при заблокированном экране система может выгрузить приложение сразу
+    // после ответа, и решение, оставшееся в памяти, пропало бы вместе с ним.
+    private let pendingKey = "voip.pendingCall"
+    private var pendingCall: [String: Any]? {
+        get { UserDefaults.standard.dictionary(forKey: pendingKey) }
+        set {
+            if let value = newValue { UserDefaults.standard.set(value, forKey: pendingKey) }
+            else { UserDefaults.standard.removeObject(forKey: pendingKey) }
+        }
+    }
 
     override init() {
         let config = CXProviderConfiguration()
@@ -57,6 +66,18 @@ final class VoipCallManager: NSObject {
 
     private func post(_ name: Notification.Name, _ payload: [String: Any]) {
         NotificationCenter.default.post(name: name, object: nil, userInfo: payload)
+    }
+
+    // Категорию и режим объявляем сами, включает сессию потом система
+    // (didActivate). Своими руками включать нельзя: CallKit ведёт звук сам.
+    private func configureAudioSession() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .voiceChat,
+                                    options: [.allowBluetooth, .defaultToSpeaker])
+        } catch {
+            print("VoipCallManager: не удалось настроить аудиосессию", error.localizedDescription)
+        }
     }
 }
 
@@ -123,6 +144,11 @@ extension VoipCallManager: CXProviderDelegate {
     // придёт от сервера.
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         let callId = callUUIDs[action.callUUID] ?? ""
+        // Звук звонка нужно объявить системе прямо здесь, до подтверждения
+        // ответа. Без этого при заблокированном экране iOS считает вызов
+        // несостоявшимся и показывает «сбой вызова»: приложение ответило,
+        // но разговором так и не занялось.
+        configureAudioSession()
         pendingCall = ["type": "answered", "callId": callId]
         post(.voipCallAnswered, ["callId": callId])
         action.fulfill()
