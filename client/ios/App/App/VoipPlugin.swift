@@ -11,6 +11,7 @@ public class VoipPlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "getToken", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getPendingCall", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "endCall", returnType: CAPPluginReturnPromise),
     ]
 
     override public func load() {
@@ -19,8 +20,21 @@ public class VoipPlugin: CAPPlugin, CAPBridgedPlugin {
         NotificationCenter.default.addObserver(self, selector: #selector(onCallEnded), name: .voipCallEnded, object: nil)
     }
 
+    // JS опрашивает это с повторами: PushKit отдаёт токен вскоре после старта
+    // приложения, и первый запрос может прийти раньше, чем токен появился.
     @objc func getToken(_ call: CAPPluginCall) {
-        call.resolve(["token": VoipCallManager.shared.deviceTokenHex as Any])
+        if let token = VoipCallManager.shared.deviceTokenHex {
+            call.resolve(["token": token])
+        } else {
+            call.resolve([:])
+        }
+    }
+
+    @objc func endCall(_ call: CAPPluginCall) {
+        if let callId = call.getString("callId") {
+            VoipCallManager.shared.endCall(callId: callId)
+        }
+        call.resolve()
     }
 
     // React дёргает это один раз при старте — если приложение было разбужено

@@ -45,6 +45,16 @@ final class VoipCallManager: NSObject {
         return pendingCall
     }
 
+    // Гасит системный экран звонка, когда звонок закончился не через него:
+    // ответили в самом приложении, звонящий отменил, истёк таймаут. Без этого
+    // на телефоне остаётся висеть «активный» звонок, которого уже нет.
+    func endCall(callId: String) {
+        guard let uuid = uuidByCallId[callId] else { return }
+        provider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
+        uuidByCallId.removeValue(forKey: callId)
+        callUUIDs.removeValue(forKey: uuid)
+    }
+
     private func post(_ name: Notification.Name, _ payload: [String: Any]) {
         NotificationCenter.default.post(name: name, object: nil, userInfo: payload)
     }
@@ -80,6 +90,7 @@ extension VoipCallManager: PKPushRegistryDelegate {
 
         let uuid = UUID()
         callUUIDs[uuid] = callId
+        uuidByCallId[callId] = uuid
 
         provider.reportNewIncomingCall(with: uuid, update: update) { error in
             if let error = error {
@@ -95,12 +106,14 @@ extension VoipCallManager: PKPushRegistryDelegate {
     }
 }
 
-// uuid (для CallKit) -> callId (наш, серверный)
+// uuid (для CallKit) -> callId (наш, серверный) и обратно
 private var callUUIDs: [UUID: String] = [:]
+private var uuidByCallId: [String: UUID] = [:]
 
 extension VoipCallManager: CXProviderDelegate {
     func providerDidReset(_ provider: CXProvider) {
         callUUIDs.removeAll()
+        uuidByCallId.removeAll()
     }
 
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
@@ -113,6 +126,7 @@ extension VoipCallManager: CXProviderDelegate {
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         guard let callId = callUUIDs[action.callUUID] else { return action.fail() }
         callUUIDs.removeValue(forKey: action.callUUID)
+        uuidByCallId.removeValue(forKey: callId)
         pendingCall = ["type": "ended", "callId": callId]
         post(.voipCallEnded, ["callId": callId])
         action.fulfill()

@@ -181,9 +181,13 @@ async function deletionPreview(req, res) {
 // Таблицы VoipPushToken нет в Prisma-схеме (как Report/UserBlock) — прямой SQL.
 async function registerVoipToken(req, res) {
   try {
-    const { token, platform } = req.body || {};
-    if (!token) return res.status(400).json({ message: 'Нужен token' });
+    const { token, platform, diag } = req.body || {};
     const username = req.user.username;
+    // Клиент сообщает, что именно он увидел (нашёлся ли нативный плагин,
+    // отдал ли PushKit токен). Без этой строки в логах «пуш не пришёл» и
+    // «токен вообще не отправлялся» выглядят одинаково.
+    console.log(`VOIP TOKEN: ${username} diag=${diag || 'нет'} token=${token ? 'есть' : 'нет'}`);
+    if (!token) return res.status(200).json({ message: 'Принято без токена' });
     const plat = platform === 'ios' ? 'ios' : 'ios'; // пока только iOS
     await prisma.$executeRaw`
       INSERT INTO "VoipPushToken" (username, token, platform, "updatedAt")

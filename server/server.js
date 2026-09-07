@@ -340,7 +340,11 @@ io.on('connection', (socket) => {
     for (const sid of targets || []) {
       io.to(sid).emit('call-incoming', { callId, from, fromName: call.fromName, roomSlug, inviteKey });
     }
-    if (!targets || targets.size === 0) wakeViaVoip(to, call);
+    // Пуш уходит всегда, когда телефон зарегистрирован, а не только когда
+    // сокета нет вовсе. Свёрнутое приложение держит сокет живым, но система
+    // его усыпляет: событие доходит, а показать входящий звонок некому.
+    // Системный экран звонка появляется только от VoIP-пуша через CallKit.
+    if (hasVoipToken) wakeViaVoip(to, call);
     socket.emit('call-ringing', { callId, to, timeoutMs });
   });
 

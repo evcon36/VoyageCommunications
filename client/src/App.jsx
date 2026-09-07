@@ -1955,6 +1955,9 @@ export default function App() {
     // оказывались в комнате: отказ приходил уже после входа.
     socket.emit('call-accept', { callId: c.callId });
     clearIncomingNotice();
+    // Ответили внутри приложения — системный экран звонка больше не нужен,
+    // сам разговор идёт в веб-слое.
+    if (c.callId) voipPlugin()?.endCall?.({ callId: c.callId }).catch(() => {});
     // Обязательно выйти из текущего звонка: иначе микрофон остаётся в старой
     // комнате и прежние собеседники продолжают нас слышать.
     if (joined) await leaveCall();
@@ -1962,7 +1965,10 @@ export default function App() {
   };
 
   const declineCall = () => {
-    if (call?.callId) socket.emit('call-decline', { callId: call.callId });
+    if (call?.callId) {
+      socket.emit('call-decline', { callId: call.callId });
+      voipPlugin()?.endCall?.({ callId: call.callId }).catch(() => {});
+    }
     setCall(null);
     clearIncomingNotice();
   };
@@ -2138,12 +2144,16 @@ export default function App() {
       setRoomId(roomSlug);
       joinRoomWithRef.current?.(roomSlug, inviteKey, { direct: true });
     });
-    socket.on('call-ended', ({ reason }) => {
+    socket.on('call-ended', ({ callId, reason }) => {
       setCall(null);
       setCallNotice(CALL_END_TEXT[reason] || 'Звонок завершён');
       // Уведомление системы и мигание панели задач должны сняться, чем бы
       // звонок ни кончился: иначе окно остаётся липким поверх всех
       clearIncomingNotice();
+      // На айфоне звонок мог быть показан системным экраном (CallKit).
+      // Если его не погасить, телефон продолжает показывать разговор,
+      // которого уже нет.
+      if (callId) voipPlugin()?.endCall?.({ callId }).catch(() => {});
     });
     socket.on('knock', (req) => setKnockQueue(prev =>
       prev.some(r => r.username === req.username && r.roomId === req.roomId) ? prev : [...prev, req]));
@@ -2211,22 +2221,42 @@ export default function App() {
   // разбудить закрытое приложение пушем, и подхватываем решение, принятое
   // прямо на экране блокировки (ответить/сбросить), пока JS ещё не работал.
   useEffect(() => {
+    if (!IS_IOS_APP || !authUser?.username) return;
     const plugin = voipPlugin();
-    if (!plugin) return;
 
-    const sendToken = (token) => {
-      if (!token || !authUser?.username) return;
+    const sendToken = (token, diag) => {
       const jwt = localStorage.getItem('token');
-      if (jwt) registerVoipToken(jwt, token).catch(() => { /* попробуем при следующем логине */ });
+      if (!jwt) return;
+      registerVoipToken(jwt, token, diag).catch(() => { /* повторим при следующем входе */ });
     };
 
-    // Токен мог прийти от PushKit ещё до входа в аккаунт — спрашиваем сами,
-    // а не только ждём событие.
-    if (authUser?.username) {
-      plugin.getToken?.().then((r) => sendToken(r?.token)).catch(() => {});
+    // Плагина нет — сообщаем об этом серверу и выходим. Молчаливый выход
+    // раньше делал причину «токен не доехал» неотличимой от «пуш не дошёл»:
+    // на сервере не оставалось вообще никакого следа.
+    if (!plugin) {
+      sendToken('', 'plugin-missing');
+      return;
     }
 
-    const tokenSub = plugin.addListener?.('tokenUpdated', (data) => sendToken(data?.token));
+    // PushKit отдаёт токен через доли секунды после старта приложения, но
+    // веб-слой к этому моменту ещё не загружен, и событие о токене улетает
+    // в пустоту. Поэтому спрашиваем сами и с повторами, а не надеемся на
+    // событие: без этого токен не регистрировался вообще никогда.
+    let stopped = false;
+    let attempts = 0;
+    const askToken = async () => {
+      if (stopped) return;
+      let token = null;
+      try { token = (await plugin.getToken())?.token || null; } catch { /* повторим */ }
+      if (token) return sendToken(token, 'ok');
+      if (++attempts >= 20) return sendToken('', 'no-token-after-retries');
+      setTimeout(askToken, 1500);
+    };
+    askToken();
+
+    const tokenSub = plugin.addListener?.('tokenUpdated', (data) => {
+      if (data?.token) { stopped = true; sendToken(data.token, 'event'); }
+    });
 
     // Ответ/сброс с экрана блокировки, случившийся, пока приложение уже
     // работает (не только при холодном старте, см. ниже).
@@ -2250,7 +2280,14 @@ export default function App() {
       if (p?.callId) pendingVoipRef.current = { type: p.type, callId: p.callId };
     }).catch(() => {});
 
-    return () => { tokenSub?.remove?.(); answeredSub?.remove?.(); endedSub?.remove?.(); };
+    // addListener отдаёт обещание, а не сам обработчик: без ожидания
+    // отписаться было невозможно и слушатели копились при каждом входе.
+    return () => {
+      stopped = true;
+      Promise.resolve(tokenSub).then((s) => s?.remove?.()).catch(() => {});
+      Promise.resolve(answeredSub).then((s) => s?.remove?.()).catch(() => {});
+      Promise.resolve(endedSub).then((s) => s?.remove?.()).catch(() => {});
+    };
   }, [authUser]);
 
   // Переподключение сокета — это новый сокет с пустым состоянием на сервере.
