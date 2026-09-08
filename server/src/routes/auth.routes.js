@@ -1,7 +1,7 @@
 const express = require('express');
 const {
   register, login, twofaSend, twofaVerify, me, updateProfile, uploadAvatar, linkTelegram,
-  deleteAccount, restoreAccount, deletionPreview, registerVoipToken,
+  deleteAccount, restoreAccount, deletionPreview, registerVoipToken, voipLog,
 } = require('../controllers/auth.controller');
 const authMiddleware = require('../middleware/auth.middleware');
 
@@ -19,5 +19,8 @@ router.get('/account/deletion-preview', authMiddleware, deletionPreview);
 router.post('/account/delete', authMiddleware, deleteAccount);
 router.post('/account/restore', authMiddleware, restoreAccount);
 router.post('/voip-token', authMiddleware, registerVoipToken);
+// Без authMiddleware намеренно: пишет нативная часть, разбуженная пушем,
+// когда токена входа у неё ещё нет. Представляется VoIP-токеном телефона.
+router.post('/voip-log', voipLog);
 
 module.exports = router;

@@ -1953,6 +1953,9 @@ export default function App() {
   // callId, на который уже ответили (или который уже сбросили) через
   // системный экран звонка CallKit, пока JS ещё не был запущен
   const pendingVoipRef = useRef(null);
+  // Вход в комнату, отложенный до разблокировки телефона (см. joinWhenActive)
+  const pendingJoinRef = useRef(null);
+  const joinWhenActiveRef = useRef(null);
 
   // Звонок можно передать явно. Без этого приём звонка, начатый сразу после
   // setCall (например, когда на экране блокировки уже нажали «Ответить»),
@@ -2160,14 +2163,15 @@ export default function App() {
     socket.on('call-accept-ok', ({ callId, roomSlug, inviteKey }) => {
       inviteKeyRef.current = inviteKey;
       setRoomId(roomSlug);
-      joinRoomWithRef.current?.(roomSlug, inviteKey, { direct: true });
-      // Гасим системный экран звонка только теперь, когда разговор реально
-      // начинается. Если гасить сразу при ответе, телефон успевает показать
-      // «сбой вызова» — звонок для системы кончился, ещё не начавшись.
-      if (callId) voipPlugin()?.endCall?.({ callId }).catch(() => {});
+      // Системный экран звонка гасим не здесь, а в момент настоящего входа
+      // в комнату: на заблокированном экране между ответом и входом проходит
+      // всё время до разблокировки, и именно живой системный звонок не даёт
+      // системе усыпить приложение.
+      joinWhenActiveRef.current?.(roomSlug, inviteKey, callId);
     });
     socket.on('call-ended', ({ callId, reason }) => {
       setCall(null);
+      pendingJoinRef.current = null;   // ждать разблокировки больше незачем
       setCallNotice(CALL_END_TEXT[reason] || 'Звонок завершён');
       // Уведомление системы и мигание панели задач должны сняться, чем бы
       // звонок ни кончился: иначе окно остаётся липким поверх всех
@@ -2334,6 +2338,16 @@ export default function App() {
     const answeredSub = VoipNative.addListener?.('callAnswered', (d) => applyPending('answered', d?.callId));
     const endedSub = VoipNative.addListener?.('callEnded', (d) => applyPending('ended', d?.callId));
 
+    // Телефон разблокировали — теперь можно и в комнату (см. joinWhenActive)
+    const resumeJoin = () => {
+      const j = pendingJoinRef.current;
+      if (!j) return;
+      pendingJoinRef.current = null;
+      if (j.callId) VoipNative.endCall?.({ callId: j.callId }).catch(() => {});
+      joinRoomWithRef.current?.(j.slug, j.key, { direct: true });
+    };
+    const activeSub = VoipNative.addListener?.('appActive', resumeJoin);
+
     // Решение, принятое на системном экране звонка, пока веб-слой спал.
     // Проверяем и при старте, и при каждом возвращении на экран: событие
     // из нативной части до усыплённого приложения не доходит, и без этой
@@ -2345,7 +2359,11 @@ export default function App() {
       }).catch(() => {});
     };
     checkPending();
-    const onVisible = () => { if (document.visibilityState === 'visible') checkPending(); };
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      checkPending();
+      resumeJoin();
+    };
     document.addEventListener('visibilitychange', onVisible);
 
     // addListener отдаёт обещание, а не сам обработчик: без ожидания
@@ -2356,6 +2374,7 @@ export default function App() {
       Promise.resolve(tokenSub).then((s) => s?.remove?.()).catch(() => {});
       Promise.resolve(answeredSub).then((s) => s?.remove?.()).catch(() => {});
       Promise.resolve(endedSub).then((s) => s?.remove?.()).catch(() => {});
+      Promise.resolve(activeSub).then((s) => s?.remove?.()).catch(() => {});
     };
   }, [authUser]);
 
@@ -2488,6 +2507,9 @@ export default function App() {
     if (slug !== roomId) setRoomId(slug);
     joiningRef.current = true;
     setStatus('Подключаемся к комнате…');
+    // Отметки для разбора звонков с заблокированного экрана: без них не
+    // видно, дошло ли приложение до входа в комнату вообще.
+    voipPlugin()?.note?.({ text: `входим в комнату ${slug}` }).catch(() => {});
 
     // Если старая комната ещё существует — сначала отключаемся
     if (livekitRoomRef.current) {
@@ -2681,6 +2703,7 @@ export default function App() {
       livekitRoomRef.current = room;
 
       room.on(LK.RoomEvent.Connected, () => {
+        voipPlugin()?.note?.({ text: 'вошли в комнату' }).catch(() => {});
         joiningRef.current = false;
         setJoined(true);
         setCallStartedAt(Date.now());
@@ -2863,6 +2886,7 @@ export default function App() {
 
     } catch (error) {
       console.error('joinRoom error:', error);
+      voipPlugin()?.note?.({ text: `в комнату не вошли: ${String(error?.message || error).slice(0, 90)}` }).catch(() => {});
       // Без имени входа причину не сузить: одна и та же ошибка означает
       // разное в зависимости от того, через какой адрес шло соединение
       const host = (() => { try { return new URL(serverUrl()).hostname; } catch { return '?'; } })();
@@ -2882,6 +2906,30 @@ export default function App() {
   };
 
   joinRoomWithRef.current = joinRoomWith;
+
+  // Ответ на звонок с заблокированного экрана. Приложение система показывает
+  // поверх экрана блокировки, но телефон при этом ещё заперт: камеру и
+  // микрофон в таком состоянии не выдают, а веб-слой то и дело замирает.
+  // Вход в комнату, начатый в этот момент, повисал на «Подключаемся к
+  // комнате…» и не оживал даже после разблокировки.
+  //
+  // Поэтому дожидаемся разблокировки и только тогда входим. Всё это время
+  // системный экран звонка остаётся на месте — он и держит приложение живым.
+  const joinWhenActive = async (slug, key, callId) => {
+    const go = () => {
+      if (callId) voipPlugin()?.endCall?.({ callId }).catch(() => {});
+      joinRoomWithRef.current?.(slug, key, { direct: true });
+    };
+    if (!IS_IOS_APP) return go();
+    let active = true;
+    try { active = (await VoipNative.getState())?.active !== false; }
+    catch { /* плагина нет — ведём себя как раньше */ }
+    if (active) return go();
+    pendingJoinRef.current = { slug, key, callId };
+    setStatus('Разблокируйте телефон, чтобы войти в разговор');
+    voipPlugin()?.note?.({ text: 'ответили на заблокированном экране, ждём разблокировки' }).catch(() => {});
+  };
+  joinWhenActiveRef.current = joinWhenActive;
 
   const leaveCall = async () => {
     joiningRef.current = false;

@@ -202,7 +202,41 @@ async function registerVoipToken(req, res) {
   }
 }
 
+// Дневник входящего звонка с самого телефона. Нужен потому, что на
+// заблокированном экране веб-слой спит и рассказать о себе не может: всё,
+// что мы знаем о таком звонке, приходит только из нативной части. Без него
+// «сбой вызова» неотличим от «приложение не проснулось» и от «проснулось,
+// но не успело войти в комнату».
+//
+// Авторизации здесь нет намеренно: приложение, разбуженное пушем, токена
+// входа ещё не знает. Вместо него представляемся тем же VoIP-токеном, по
+// которому Apple доставила пуш — по нему же находим, чей это телефон.
+async function voipLog(req, res) {
+  try {
+    const { token, events } = req.body || {};
+    const list = Array.isArray(events) ? events.slice(0, 40) : [];
+    if (!list.length) return res.status(200).json({ ok: true });
+    let who = 'неизвестный';
+    if (token) {
+      const rows = await prisma.$queryRaw`
+        SELECT username FROM "VoipPushToken" WHERE token = ${String(token)} LIMIT 1
+      `;
+      if (rows && rows[0]) who = rows[0].username;
+    }
+    for (const e of list) {
+      const at = String(e?.at || '').slice(0, 30);
+      const name = String(e?.name || '?').slice(0, 40);
+      const detail = String(e?.detail || '').slice(0, 200);
+      console.log(`VOIP NATIVE [${who}] ${at} ${name}${detail ? ' — ' + detail : ''}`);
+    }
+    return res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error('VOIP LOG ERROR:', e.message);
+    return res.status(200).json({ ok: false });
+  }
+}
+
 module.exports = {
   register, login, twofaSend, twofaVerify, me, updateProfile, uploadAvatar, linkTelegram,
-  deleteAccount, restoreAccount, deletionPreview, registerVoipToken,
+  deleteAccount, restoreAccount, deletionPreview, registerVoipToken, voipLog,
 };

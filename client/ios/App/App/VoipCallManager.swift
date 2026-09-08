@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import PushKit
 import CallKit
 import AVFoundation
@@ -19,6 +20,11 @@ final class VoipCallManager: NSObject {
 
     private(set) var deviceTokenHex: String?
 
+    // Тишина, которую мы играем, пока звонок принят, а разговора ещё нет.
+    // Зачем — см. startKeepAlive().
+    private let engine = AVAudioEngine()
+    private let silence = AVAudioPlayerNode()
+
     // JS может ещё не быть готов (приложение только что разбудили пушем) —
     // кладём решение сюда, плагин отдаст его, как только React смонтируется
     // и спросит через getPendingCall(). Хранится на диске, а не в памяти:
@@ -34,10 +40,17 @@ final class VoipCallManager: NSObject {
     }
 
     override init() {
-        let config = CXProviderConfiguration()
+        // Имя и иконка — единственный способ вернуться в приложение с
+        // системного экрана звонка. Без iconTemplateImageData кнопки
+        // приложения там нет вовсе, и человек, ответивший с рабочего стола,
+        // остаётся на системном экране без входа в разговор.
+        let config = CXProviderConfiguration(localizedName: "Voyage Coms")
         config.supportsVideo = true
         config.maximumCallsPerCallGroup = 1
         config.supportedHandleTypes = [.generic]
+        if let icon = UIImage(named: "CallKitIcon") {
+            config.iconTemplateImageData = icon.pngData()
+        }
         provider = CXProvider(configuration: config)
         super.init()
         provider.setDelegate(self, queue: nil)
@@ -46,6 +59,92 @@ final class VoipCallManager: NSObject {
     func setup() {
         registry.delegate = self
         registry.desiredPushTypes = [.voIP]
+        log("старт", "состояние \(appStateName())")
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(onDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification, object: nil)
+        scheduleDebugCallIfRequested()
+    }
+
+    // ── Дневник звонка ────────────────────────────────────────────────────
+    //
+    // На заблокированном экране веб-слой спит и рассказать о себе не может:
+    // всё, что мы знаем о таком звонке, приходит только отсюда. Без этого
+    // «сбой вызова» неотличим от «приложение не проснулось» и от
+    // «проснулось, но не успело войти в комнату».
+    //
+    // Пишем на диск сразу, отправляем следом: если приложение убьют, записи
+    // переживут смерть и уедут при следующем запуске.
+    private let logKey = "voip.log"
+
+    func log(_ name: String, _ detail: String = "") {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        var events = UserDefaults.standard.array(forKey: logKey) as? [[String: String]] ?? []
+        events.append(["at": stamp, "name": name, "detail": detail])
+        if events.count > 40 { events.removeFirst(events.count - 40) }
+        UserDefaults.standard.set(events, forKey: logKey)
+        print("VOIP: \(name) \(detail)")
+        flushLog()
+    }
+
+    // Входы те же, что у веб-слоя, и по той же причине: ни один не работает у
+    // всех. Первый — единственный, который доходит на мобильном интернете в
+    // России, остальные выручают, когда с ним беда. Мы уже теряли записи
+    // молча, когда у главного входа кончился сертификат.
+    private let logOrigins = [
+        "https://voyage-community.ru",
+        "https://voyage-coms.ru",
+        "https://communications.voyage-community.ru",
+    ]
+
+    private func flushLog() {
+        guard let token = deviceTokenHex else { return }   // без токена сервер нас не опознает
+        let events = UserDefaults.standard.array(forKey: logKey) as? [[String: String]] ?? []
+        guard !events.isEmpty else { return }
+        guard let body = try? JSONSerialization.data(withJSONObject: ["token": token, "events": events])
+        else { return }
+        send(body, sent: events.count, origins: logOrigins[...])
+    }
+
+    private func send(_ body: Data, sent: Int, origins: ArraySlice<String>) {
+        guard let origin = origins.first,
+              let url = URL(string: origin + "/auth/voip-log") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        req.timeoutInterval = 8
+        URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
+            guard let self = self else { return }
+            // Чистим только то, что сервер точно принял: иначе при обрыве
+            // связи записи пропадут, а они и нужны как раз в такие моменты.
+            if let http = resp as? HTTPURLResponse, http.statusCode == 200 {
+                let left = UserDefaults.standard.array(forKey: self.logKey) as? [[String: String]] ?? []
+                UserDefaults.standard.set(Array(left.dropFirst(sent)), forKey: self.logKey)
+            } else {
+                self.send(body, sent: sent, origins: origins.dropFirst())
+            }
+        }.resume()
+    }
+
+    private func appStateName() -> String {
+        switch UIApplication.shared.applicationState {
+        case .active: return "активно"
+        case .inactive: return "неактивно"        // в том числе поверх заблокированного экрана
+        case .background: return "в фоне"
+        @unknown default: return "неизвестно"
+        }
+    }
+
+    // Пока телефон заблокирован, приложение поверх экрана блокировки живёт в
+    // состоянии «неактивно» и становится активным только после разблокировки.
+    // Веб-слою это нужно знать: входить в комнату до разблокировки бесполезно,
+    // камеру и микрофон система в этот момент не отдаёт.
+    var isActive: Bool { UIApplication.shared.applicationState == .active }
+
+    @objc private func onDidBecomeActive() {
+        log("телефон разблокирован")
+        post(.voipAppActive, [:])
     }
 
     // Забирает и очищает то, что накопилось, пока JS не был готов слушать.
@@ -62,6 +161,7 @@ final class VoipCallManager: NSObject {
         provider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
         uuidByCallId.removeValue(forKey: callId)
         callUUIDs.removeValue(forKey: uuid)
+        stopKeepAlive()
     }
 
     private func post(_ name: Notification.Name, _ payload: [String: Any]) {
@@ -76,30 +176,69 @@ final class VoipCallManager: NSObject {
             try session.setCategory(.playAndRecord, mode: .voiceChat,
                                     options: [.allowBluetooth, .defaultToSpeaker])
         } catch {
-            print("VoipCallManager: не удалось настроить аудиосессию", error.localizedDescription)
+            log("аудиосессия не настроилась", error.localizedDescription)
         }
     }
-}
 
-extension VoipCallManager: PKPushRegistryDelegate {
-    func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
-        guard type == .voIP else { return }
-        let hex = pushCredentials.token.map { String(format: "%02x", $0) }.joined()
-        deviceTokenHex = hex
-        post(.voipTokenUpdated, ["token": hex])
+    // Между «ответил» и «разговор пошёл» у нас провал в несколько секунд, а на
+    // заблокированном экране — до самой разблокировки: разговор ведёт WebRTC
+    // внутри веб-слоя, а тот в это время спит. Для системы такой звонок
+    // выглядит как принятый, но молчащий и ничем не занятый, и она вправе
+    // усыпить приложение и закрыть вызов — это и видно как «сбой вызова».
+    //
+    // Поэтому с момента ответа и до входа в комнату играем тишину: звонок
+    // становится настоящим звонком с живым звуком, и система его не трогает.
+    private func startKeepAlive() {
+        guard !engine.isRunning else { return }
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48000)
+        else { return }
+        buffer.frameLength = buffer.frameCapacity      // нули — это и есть тишина
+        engine.attach(silence)
+        engine.connect(silence, to: engine.mainMixerNode, format: format)
+        do {
+            try engine.start()
+            silence.scheduleBuffer(buffer, at: nil, options: .loops)
+            silence.play()
+            log("держим звонок")
+        } catch {
+            log("держать звонок не вышло", error.localizedDescription)
+        }
     }
 
-    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
-        deviceTokenHex = nil
+    private func stopKeepAlive() {
+        guard engine.isRunning else { return }
+        silence.stop()
+        engine.stop()
+        engine.detach(silence)
     }
 
-    func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
-        guard type == .voIP else { return completion() }
-        let data = payload.dictionaryPayload
+    // Стенд для отладки: настоящих VoIP-пушей симулятор не получает, поэтому
+    // входящий звонок нужно уметь показать самим. Запускается только с
+    // аргументом -voipDebugCallDelay N и только в отладочной сборке, в
+    // TestFlight и App Store этого кода нет вовсе.
+    private func scheduleDebugCallIfRequested() {
+        #if DEBUG
+        let delay = UserDefaults.standard.integer(forKey: "voipDebugCallDelay")
+        guard delay > 0 else { return }
+        // Свёрнутое приложение система усыпляет, и обычный таймер до срока не
+        // доживает. Просим у неё отсрочку — её хватает, чтобы дождаться.
+        var task = UIBackgroundTaskIdentifier.invalid
+        task = UIApplication.shared.beginBackgroundTask(withName: "voipDebugCall") {
+            UIApplication.shared.endBackgroundTask(task)
+            task = .invalid
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(delay)) { [weak self] in
+            self?.reportIncoming(callId: "debug-\(UUID().uuidString.prefix(8))",
+                                 fromName: "Отладочный звонок") {}
+            if task != .invalid { UIApplication.shared.endBackgroundTask(task) }
+        }
+        #endif
+    }
 
-        let callId = data["callId"] as? String ?? UUID().uuidString
-        let fromName = data["fromName"] as? String ?? "Voyage Coms"
-
+    // Показ входящего звонка системе. Вынесено из обработчика пуша: этим же
+    // путём звонок показывает отладочный стенд.
+    func reportIncoming(callId: String, fromName: String, completion: @escaping () -> Void) {
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: fromName)
         update.localizedCallerName = fromName
@@ -113,12 +252,38 @@ extension VoipCallManager: PKPushRegistryDelegate {
         callUUIDs[uuid] = callId
         uuidByCallId[callId] = uuid
 
-        provider.reportNewIncomingCall(with: uuid, update: update) { error in
+        provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
             if let error = error {
-                print("VoipCallManager: reportNewIncomingCall error", error.localizedDescription)
+                self?.log("показать звонок не вышло", error.localizedDescription)
+            } else {
+                self?.log("звонок показан", "\(callId), состояние \(self?.appStateName() ?? "?")")
             }
             completion()
         }
+    }
+}
+
+extension VoipCallManager: PKPushRegistryDelegate {
+    func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
+        guard type == .voIP else { return }
+        let hex = pushCredentials.token.map { String(format: "%02x", $0) }.joined()
+        deviceTokenHex = hex
+        post(.voipTokenUpdated, ["token": hex])
+        flushLog()   // токен появился — теперь есть чем представиться серверу
+    }
+
+    func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
+        deviceTokenHex = nil
+    }
+
+    func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
+        guard type == .voIP else { return completion() }
+        let data = payload.dictionaryPayload
+
+        let callId = data["callId"] as? String ?? UUID().uuidString
+        let fromName = data["fromName"] as? String ?? "Voyage Coms"
+        log("пуш пришёл", "\(callId), состояние \(appStateName())")
+        reportIncoming(callId: callId, fromName: fromName, completion: completion)
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType) {
@@ -133,8 +298,10 @@ private var uuidByCallId: [String: UUID] = [:]
 
 extension VoipCallManager: CXProviderDelegate {
     func providerDidReset(_ provider: CXProvider) {
+        log("система сбросила звонки")
         callUUIDs.removeAll()
         uuidByCallId.removeAll()
+        stopKeepAlive()
     }
 
     // Если приложение успело выгрузиться между пушем и ответом, связь с
@@ -149,6 +316,7 @@ extension VoipCallManager: CXProviderDelegate {
         // несостоявшимся и показывает «сбой вызова»: приложение ответило,
         // но разговором так и не занялось.
         configureAudioSession()
+        log("ответили", "\(callId.isEmpty ? "номер потерян" : callId), состояние \(appStateName())")
         pendingCall = ["type": "answered", "callId": callId]
         post(.voipCallAnswered, ["callId": callId])
         action.fulfill()
@@ -156,16 +324,25 @@ extension VoipCallManager: CXProviderDelegate {
 
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         let callId = callUUIDs[action.callUUID] ?? ""
+        log("звонок завершён системой", "\(callId), состояние \(appStateName())")
         callUUIDs.removeValue(forKey: action.callUUID)
         if !callId.isEmpty { uuidByCallId.removeValue(forKey: callId) }
         pendingCall = ["type": "ended", "callId": callId]
         post(.voipCallEnded, ["callId": callId])
+        stopKeepAlive()
         action.fulfill()
     }
 
     func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
-        // Аудио самого звонка ведёт WebRTC внутри WKWebView (через net.js/LiveKit),
-        // не нативный слой — здесь ничего активировать дополнительно не нужно.
+        // Разговор ведёт WebRTC внутри веб-слоя, но до него дело дойдёт не
+        // сразу, а на заблокированном экране — только после разблокировки.
+        // До тех пор звонок держим тишиной, иначе система его закроет.
+        log("система включила звук")
+        startKeepAlive()
+    }
+
+    func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+        stopKeepAlive()
     }
 }
 
@@ -173,4 +350,5 @@ extension Notification.Name {
     static let voipTokenUpdated = Notification.Name("voipTokenUpdated")
     static let voipCallAnswered = Notification.Name("voipCallAnswered")
     static let voipCallEnded = Notification.Name("voipCallEnded")
+    static let voipAppActive = Notification.Name("voipAppActive")
 }

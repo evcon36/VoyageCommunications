@@ -12,12 +12,30 @@ public class VoipPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getToken", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getPendingCall", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "endCall", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getState", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "note", returnType: CAPPluginReturnPromise),
     ]
 
     override public func load() {
         NotificationCenter.default.addObserver(self, selector: #selector(onTokenUpdated), name: .voipTokenUpdated, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(onCallAnswered), name: .voipCallAnswered, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(onCallEnded), name: .voipCallEnded, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(onAppActive), name: .voipAppActive, object: nil)
+        VoipCallManager.shared.log("веб-слой загрузился")
+    }
+
+    // Пока телефон заблокирован, приложение показано поверх экрана блокировки,
+    // но остаётся неактивным: камеру и микрофон система в этот момент не даёт,
+    // и входить в комнату бесполезно. Веб-слой спрашивает об этом перед входом.
+    @objc func getState(_ call: CAPPluginCall) {
+        call.resolve(["active": VoipCallManager.shared.isActive])
+    }
+
+    // Веб-слой пишет в тот же дневник, что и нативная часть. Без этого в
+    // разборе звонка видна только половина пути.
+    @objc func note(_ call: CAPPluginCall) {
+        VoipCallManager.shared.log("веб: " + (call.getString("text") ?? "?"))
+        call.resolve()
     }
 
     // JS опрашивает это с повторами: PushKit отдаёт токен вскоре после старта
@@ -54,5 +72,9 @@ public class VoipPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc private func onCallEnded(_ note: Notification) {
         notifyListeners("callEnded", data: note.userInfo as? [String: Any] ?? [:])
+    }
+
+    @objc private func onAppActive(_ note: Notification) {
+        notifyListeners("appActive", data: [:])
     }
 }
