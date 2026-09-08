@@ -2921,9 +2921,15 @@ export default function App() {
       joinRoomWithRef.current?.(slug, key, { direct: true });
     };
     if (!IS_IOS_APP) return go();
+    // Ограничение по времени обязательно: зависший вызов плагина иначе
+    // молча съедает ответ на звонок целиком. На токене мы это уже проходили.
     let active = true;
-    try { active = (await VoipNative.getState())?.active !== false; }
-    catch { /* плагина нет — ведём себя как раньше */ }
+    try {
+      active = (await Promise.race([
+        VoipNative.getState(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('таймаут плагина')), 2000)),
+      ]))?.active !== false;
+    } catch { /* плагина нет или он молчит — входим как раньше */ }
     if (active) return go();
     pendingJoinRef.current = { slug, key, callId };
     setStatus('Разблокируйте телефон, чтобы войти в разговор');
