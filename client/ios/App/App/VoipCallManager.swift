@@ -77,6 +77,16 @@ final class VoipCallManager: NSObject {
     // переживут смерть и уедут при следующем запуске.
     private let logKey = "voip.log"
 
+    // Отправка не сразу, а пачкой. Каждое событие отдельным запросом — это
+    // сорок с лишним запросов в минуту на живом звонке, а путь /auth/ на
+    // сервере ограничен тридцатью. Дневник выедал лимит и ронял в 429
+    // соседей по пути — в том числе регистрацию пуш-токена, без которой
+    // звонки в закрытое приложение не доходят вовсе. Дневник обязан быть
+    // незаметным: он служебный и не вправе мешать работе.
+    private var flushScheduled = false
+    private var flushing = false
+    private var pauseUntil: Date?
+
     func log(_ name: String, _ detail: String = "") {
         let stamp = ISO8601DateFormatter().string(from: Date())
         var events = UserDefaults.standard.array(forKey: logKey) as? [[String: String]] ?? []
@@ -84,7 +94,16 @@ final class VoipCallManager: NSObject {
         if events.count > 40 { events.removeFirst(events.count - 40) }
         UserDefaults.standard.set(events, forKey: logKey)
         print("VOIP: \(name) \(detail)")
-        flushLog()
+        scheduleFlush()
+    }
+
+    private func scheduleFlush() {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            self?.flushScheduled = false
+            self?.flushLog()
+        }
     }
 
     // Входы те же, что у веб-слоя, и по той же причине: ни один не работает у
@@ -99,16 +118,21 @@ final class VoipCallManager: NSObject {
 
     private func flushLog() {
         guard let token = deviceTokenHex else { return }   // без токена сервер нас не опознает
+        // Одна отправка за раз: иначе параллельные заходы шлют одни и те же
+        // записи по нескольку раз, и в логах двоится то, чего не было.
+        guard !flushing else { return }
+        if let until = pauseUntil, until > Date() { return }
         let events = UserDefaults.standard.array(forKey: logKey) as? [[String: String]] ?? []
         guard !events.isEmpty else { return }
         guard let body = try? JSONSerialization.data(withJSONObject: ["token": token, "events": events])
         else { return }
+        flushing = true
         send(body, sent: events.count, origins: logOrigins[...])
     }
 
     private func send(_ body: Data, sent: Int, origins: ArraySlice<String>) {
         guard let origin = origins.first,
-              let url = URL(string: origin + "/auth/voip-log") else { return }
+              let url = URL(string: origin + "/auth/voip-log") else { flushing = false; return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -116,13 +140,26 @@ final class VoipCallManager: NSObject {
         req.timeoutInterval = 8
         URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
             guard let self = self else { return }
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             // Чистим только то, что сервер точно принял: иначе при обрыве
             // связи записи пропадут, а они и нужны как раз в такие моменты.
-            if let http = resp as? HTTPURLResponse, http.statusCode == 200 {
+            if code == 200 {
+                self.flushing = false
                 let left = UserDefaults.standard.array(forKey: self.logKey) as? [[String: String]] ?? []
                 UserDefaults.standard.set(Array(left.dropFirst(sent)), forKey: self.logKey)
-            } else {
+                return
+            }
+            // 429 — мы сами перебрали лимит. Идти с этим на другие входы
+            // нельзя: там тот же сервер и тот же счётчик. Молчим минуту.
+            if code == 429 {
+                self.flushing = false
+                self.pauseUntil = Date().addingTimeInterval(60)
+                return
+            }
+            if origins.count > 1 {
                 self.send(body, sent: sent, origins: origins.dropFirst())
+            } else {
+                self.flushing = false   // записи остались на диске, уйдут позже
             }
         }.resume()
     }
