@@ -83,6 +83,9 @@ const TIMEOUT_MS = 12000;
 // Первая попытка ждёт недолго: если вход недоступен, десять секунд тишины на
 // запуске человек воспринимает как «приложение сломалось».
 const FIRST_TRY_MS = 3500;
+// Сколько ждать главный вход, когда запасной уже ответил. Меньше секунды
+// заметной задержки на запуске не даёт, а от выбора хрупкого входа спасает.
+const PREFERRED_GRACE_MS = 900;
 
 // Гонка входов на старте. Раньше входы перебирались по очереди, и когда
 // первый молчал, запуск упирался в полный таймаут. Пробуем все сразу дешёвым
@@ -100,12 +103,37 @@ export function pickOrigin() {
 
   probing = new Promise((resolve) => {
     let done = false;
+    let graceTimer = null;
     const finish = (origin) => {
       if (done) return;
       done = true;
+      clearTimeout(graceTimer);
       if (origin) useOrigin(origin);
       resolve(current);
     };
+
+    // Побеждать должен не самый быстрый, а самый надёжный.
+    //
+    // Раньше гонку выигрывал любой, кто первым ответил. На мобильном
+    // интернете это ломало приложение через раз: главный вход — единственный,
+    // который у российских операторов доходит стабильно, но запасные отвечают
+    // на дешёвую проверку не медленнее. Выигрывал запасной, приложение
+    // цеплялось за него, а через минуту оператор его резал — и человек видел
+    // «нет связи с сервером» до полного перезапуска. Следующий запуск бросал
+    // те же кости заново, отсюда «открывается через раз».
+    //
+    // Поэтому главному входу даём фору: ответивший запасной ждёт в стороне и
+    // побеждает, только если главный за это время так и не отозвался.
+    const preferred = CANDIDATES[0];
+    let backup = null;
+    const settle = () => finish(backup);
+    const won = (origin) => {
+      if (origin === preferred) return finish(origin);
+      if (backup) return;
+      backup = origin;
+      graceTimer = setTimeout(settle, PREFERRED_GRACE_MS);
+    };
+
     let left = CANDIDATES.length;
     for (const origin of CANDIDATES) {
       const ctrl = new AbortController();
@@ -119,13 +147,13 @@ export function pickOrigin() {
       fetch(`${origin}/rooms/guest-info/__probe__`, { signal: ctrl.signal })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error('чужой ответ'))))
         .then((d) => (d && typeof d === 'object' && 'exists' in d
-          ? finish(origin)
+          ? won(origin)
           : Promise.reject(new Error('ответ не от нашего сервера'))))
-        .catch(() => { if (--left === 0) finish(null); })
+        .catch(() => { if (--left === 0) settle(); })
         .finally(() => clearTimeout(timer));
     }
     // страховка: даже если молчат все, приложение должно поехать дальше
-    setTimeout(() => finish(null), FIRST_TRY_MS + 300);
+    setTimeout(settle, FIRST_TRY_MS + 300);
   }).finally(() => { probing = null; });
 
   return probing;
