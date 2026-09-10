@@ -1478,6 +1478,9 @@ a.room-card-btn { text-decoration: none; }
 }
 .auth-retry-title { font-size: 20px; font-weight: 700; color: var(--text); margin-bottom: 10px; }
 .auth-retry-text { font-size: 14px; color: var(--text-dim); margin-bottom: 18px; line-height: 1.5; }
+/* Какой вход не дошёл: человеку это подсказывает, что делать (сменить сеть),
+   а нам — с чего начинать разбор, если он покажет снимок экрана */
+.auth-retry-host { font-size: 12px; color: var(--text-dim); opacity: .75; margin: -10px 0 16px; font-variant-numeric: tabular-nums; }
 .auth-retry .primary-btn { width: 100%; }
 
 /* ── PiP-раскладка 1-на-1 (телефон/планшет) ── */

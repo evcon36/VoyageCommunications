@@ -857,6 +857,9 @@ export default function App() {
 
   // Auth
   const [authNetError, setAuthNetError] = useState(false);
+  // Какой именно вход не дошёл: без этого «нет связи» одинаково выглядит и
+  // при мёртвом интернете, и при живом интернете с закрытым входом
+  const [authNetHost, setAuthNetHost] = useState('');
   const checkAuth = useCallback(async () => {
     // Сначала выясняем, какой вход отвечает: оба пробуются одновременно, а не
     // по очереди. Раньше перебор шёл последовательно, и когда первый вход у
@@ -882,6 +885,15 @@ export default function App() {
         setAuthChecked(true);
       } else {
         // сеть моргнула — токен НЕ трогаем, предлагаем повторить
+        const entrance = (() => { try { return new URL(serverUrl()).host; } catch { return '?'; } })();
+        setAuthNetHost(entrance);
+        // Нативный слой ходит своим путём и со своим перебором входов,
+        // поэтому доносит новость даже тогда, когда веб-слой упёрся в
+        // мёртвый вход. Без этого «не открывается» не оставляло следов
+        // вообще: до сервера не доходило ни одного запроса.
+        voipPlugin()?.note?.({
+          text: `не открылось: вход ${entrance}, ${String(e?.message || e).slice(0, 80)}`,
+        }).catch(() => {});
         setAuthNetError(true);
         setAuthChecked(true);
       }
@@ -3645,6 +3657,7 @@ export default function App() {
         <div className="auth-retry-card">
           <div className="auth-retry-title">Нет связи с сервером</div>
           <div className="auth-retry-text">Похоже, интернет нестабилен. Ваш аккаунт на месте — попробуйте ещё раз.</div>
+          {authNetHost && <div className="auth-retry-host">не ответил вход {authNetHost}</div>}
           <button className="primary-btn" onClick={() => { setAuthChecked(false); checkAuth(); }}>Повторить</button>
           {altUrl && (
             <div className="alt-domain-box">
