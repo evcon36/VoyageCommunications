@@ -228,6 +228,34 @@ async function tryOnce(origin, path, init, timeoutMs = TIMEOUT_MS) {
 // поверх первой, и человек видел ошибку при работающей записи.
 //
 // timeout: сколько ждать ответа. retry: можно ли повторять на другом входе.
+// Все входы сразу, побеждает первый ответивший. Только для чтения: один и
+// тот же GET можно отправить хоть всем сразу, запись — нельзя.
+function raceOrigins(origins, path, init, wait) {
+  return new Promise((resolve, reject) => {
+    let left = origins.length;
+    let done = false;
+    let lastError = null;
+    for (const origin of origins) {
+      tryOnce(origin, path, init, wait || TIMEOUT_MS)
+        .then((resp) => {
+          // Заглушки блокировщиков и сбои посредника приходят кодами 5xx —
+          // это не ответ нашего сервера, пусть выигрывает кто-то другой
+          if (resp.status >= 502 && resp.status <= 599) {
+            throw new Error(`вход ответил ${resp.status}`);
+          }
+          if (done) return;
+          done = true;
+          if (origin !== current) useOrigin(origin);
+          resolve(resp);
+        })
+        .catch((e) => {
+          lastError = e;
+          if (--left === 0 && !done) reject(lastError || new Error('Сервер недоступен'));
+        });
+    }
+  });
+}
+
 export async function apiFetch(path, init, opts = {}) {
   const order = [current, ...CANDIDATES.filter(o => o !== current)];
   const allowRetry = opts.retry !== false;
@@ -244,6 +272,24 @@ export async function apiFetch(path, init, opts = {}) {
   // при работающем сервере. Отменить сам запрос при этом не выходит: в
   // приложении он идёт через системную сеть, и отмена там не срабатывает.
   const isRead = String(init?.method || 'GET').toUpperCase() === 'GET';
+
+  // Чтение: короткая попытка по текущему входу, а если он молчит — остальные
+  // все сразу, каждому полное время.
+  //
+  // Перебор по очереди подводил ровно там, где важнее всего. На мобильном
+  // интернете запасной вход отвечает за семь секунд; в короткий лимит
+  // очередной попытки он не укладывался, приложение объявляло «нет связи с
+  // сервером» — и это при живом входе. По логам видно: запрос доходил до
+  // сервера уже после того, как приложение сдалось.
+  if (isRead && allowRetry && order.length > 1) {
+    try {
+      const resp = await tryOnce(current, path, init, wait || FIRST_TRY_MS);
+      if (!(resp.status >= 502 && resp.status <= 599)) return resp;
+    } catch (e) {
+      if (!isNetworkFailure(e)) throw e;   // не сетевая — другой вход не поможет
+    }
+    return raceOrigins(order, path, init, wait);
+  }
 
   for (let i = 0; i < order.length; i++) {
     const origin = order[i];
