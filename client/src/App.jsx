@@ -860,17 +860,29 @@ export default function App() {
   // Какой именно вход не дошёл: без этого «нет связи» одинаково выглядит и
   // при мёртвом интернете, и при живом интернете с закрытым входом
   const [authNetHost, setAuthNetHost] = useState('');
+  // Ни один шаг проверки не имеет права висеть вечно: человек смотрит на
+  // «Проверяем вход» без объяснений и без возможности что-то сделать.
+  const withDeadline = (p, ms, what) => Promise.race([
+    p,
+    new Promise((_, rej) => setTimeout(() => {
+      const e = new Error(`${what}: не дождались ответа`);
+      e.name = 'TimeoutError';
+      rej(e);
+    }, ms)),
+  ]);
+
   const checkAuth = useCallback(async () => {
     // Сначала выясняем, какой вход отвечает: оба пробуются одновременно, а не
     // по очереди. Раньше перебор шёл последовательно, и когда первый вход у
     // оператора молчал, запуск упирался в его полный таймаут — отсюда десять
     // секунд тишины на экране проверки.
-    await pickOrigin();
+    try { await withDeadline(pickOrigin(), 8000, 'выбор входа'); }
+    catch { /* не выбрали — пойдём по текущему, он всё равно проставлен */ }
     const token = localStorage.getItem('token');
     if (!token) { setAuthChecked(true); return; }
     setAuthNetError(false);
     try {
-      const result = await getMe(token);
+      const result = await withDeadline(getMe(token), 20000, 'проверка входа');
       setAuthUser(result.user);
       setUserName(result.user.displayName || result.user.username || 'Иван');
       // дефолтный ID комнаты: ник + 3 случайные цифры (если не пришли по ссылке)
@@ -2676,6 +2688,12 @@ export default function App() {
         dynacast: true,
         videoCaptureDefaults: {
           resolution: { width: 640, height: 360, frameRate: 15 },
+          // Фронтальную просим явно. Без этого выбор камеры при входе в
+          // звонок оставался на усмотрение системы, и та время от времени
+          // отдавала не ту (или не отдавала вовсе): картинки не было, пока
+          // человек не переключит камеру туда и обратно. Переключение
+          // работало именно потому, что там facingMode задан явно.
+          facingMode: 'user',
         },
         // Чистый звук: эхо, шумоподавление, ровная громкость.
         //
