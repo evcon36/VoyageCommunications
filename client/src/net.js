@@ -116,7 +116,9 @@ function scheduleComeback() {
 // Отличаем «сеть не дошла» от «сервер ответил ошибкой». Переключаться имеет
 // смысл только в первом случае: ответ 500 с другого входа будет таким же.
 function isNetworkFailure(e) {
-  return e instanceof TypeError || e?.name === 'AbortError' || e?.name === 'TimeoutError';
+  return e instanceof TypeError || e?.name === 'AbortError' || e?.name === 'TimeoutError'
+    // Так выглядит отказ «сети нет» из веб-слоя: обычный Error с этим текстом
+    || /Load failed|Network(Error| request failed)|The Internet connection/i.test(String(e?.message || ''));
 }
 
 // Сроки рассчитаны на сеть, где соединение устанавливается не сразу.
@@ -315,13 +317,35 @@ export async function apiFetch(path, init, opts = {}) {
   // сервером» — и это при живом входе. По логам видно: запрос доходил до
   // сервера уже после того, как приложение сдалось.
   if (isRead && allowRetry && order.length > 1) {
-    try {
-      const resp = await tryOnce(current, path, init, wait || FIRST_TRY_MS);
-      if (!unusable(resp)) return resp;
-    } catch (e) {
-      if (!isNetworkFailure(e)) throw e;   // не сетевая — другой вход не поможет
+    // Мгновенный отказ всех входов сразу — это не «сервер недоступен», а
+    // «система считает, что сети нет».
+    //
+    // При холодном запуске радиомодуль телефона спит, и iOS отвечает
+    // приложению «интернет отсутствует» (-1009), не выходя в сеть вовсе. В
+    // дневнике с телефона владельца это выглядело так: все три входа падают
+    // за две секунды с одной и той же ошибкой. Приложение верило первому
+    // ответу и показывало «нет связи с сервером», хотя связь была — Safari,
+    // открытый минутой позже, сайт открывал.
+    //
+    // Поэтому такой отказ считаем преждевременным и пробуем ещё, дав модулю
+    // время проснуться. Настоящая недоступность переживёт эти попытки и
+    // отвалится честно, просто на несколько секунд позже.
+    for (let attempt = 0; ; attempt++) {
+      const startedAt = Date.now();
+      try {
+        try {
+          const resp = await tryOnce(current, path, init, wait || FIRST_TRY_MS);
+          if (!unusable(resp)) return resp;
+        } catch (e) {
+          if (!isNetworkFailure(e)) throw e;   // не сетевая — другой вход не поможет
+        }
+        return await raceOrigins(order, path, init, wait);
+      } catch (e) {
+        const instant = Date.now() - startedAt < 4000;
+        if (attempt >= 3 || !instant || !isNetworkFailure(e)) throw e;
+        await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+      }
     }
-    return raceOrigins(order, path, init, wait);
   }
 
   for (let i = 0; i < order.length; i++) {

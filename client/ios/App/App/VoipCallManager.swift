@@ -15,6 +15,18 @@ import AVFoundation
 final class VoipCallManager: NSObject {
     static let shared = VoipCallManager()
 
+    // Своя сессия, которая умеет дождаться сети.
+    //
+    // URLSession.shared при холодном запуске отвечает «интернет отсутствует»
+    // мгновенно, не выходя в сеть: радиомодуль ещё спит. waitsForConnectivity
+    // заставляет её подождать появления связи вместо мгновенного отказа.
+    private lazy var net: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.waitsForConnectivity = true
+        cfg.timeoutIntervalForResource = 60
+        return URLSession(configuration: cfg)
+    }()
+
     private let registry = PKPushRegistry(queue: .main)
     private let provider: CXProvider
 
@@ -85,7 +97,7 @@ final class VoipCallManager: NSObject {
             req.timeoutInterval = 30   // соединение на мобильном может устанавливаться секундами
             req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
             let started = Date()
-            URLSession.shared.dataTask(with: req) { [weak self] _, resp, err in
+            net.dataTask(with: req) { [weak self] _, resp, err in
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
                 if let err = err as NSError? {
                     self?.log("вход \(host)", "ошибка \(err.domain) \(err.code): \(err.localizedDescription), \(ms) мс")
@@ -188,7 +200,7 @@ final class VoipCallManager: NSObject {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
         req.timeoutInterval = 20
-        URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
+        net.dataTask(with: req) { [weak self] _, resp, _ in
             guard let self = self else { return }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             self.onMain {
