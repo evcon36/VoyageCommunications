@@ -89,7 +89,20 @@ final class VoipCallManager: NSObject {
     // Дневник умеет уходить через любой из входов, поэтому итог доедет до
     // сервера даже тогда, когда часть входов молчит.
     private func checkOrigins() {
-        for origin in logOrigins {
+        // Только главный вход и только через несколько секунд после старта.
+        //
+        // Раньше проверялись все три сразу, вместе с запуском приложения. На
+        // слабом мобильном канале это добавляло три соединения к и без того
+        // большой пачке, и топило её: в дневнике владельца главный вход
+        // отвечал за 215 мс, а остальные уходили в таймауты по 38 и 60 секунд.
+        // Диагностика не вправе мешать тому, что она измеряет.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+            self?.probe(self?.logOrigins.first ?? "")
+        }
+    }
+
+    private func probe(_ origin: String) {
+        for origin in [origin].filter({ !$0.isEmpty }) {
             guard let url = URL(string: origin + "/rooms/guest-info/__probe__?t=\(Int(Date().timeIntervalSince1970))")
             else { continue }
             let host = URL(string: origin)?.host ?? origin

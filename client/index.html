@@ -111,8 +111,17 @@
             .then(function () { reach[key] = true; }, function () { reach[key] = false; })
             .finally(function () { clearTimeout(t); });
         }
+        // В приложении проверяем только главный вход.
+        //
+        // Второй пинг стоил лишнего соединения на самом старте, а на слабом
+        // мобильном канале лавина одновременных соединений топит сама себя:
+        // главный вход отвечал за 215 мс, и в ту же секунду всё остальное
+        // уходило в таймауты. В браузере оба пинга остаются: там они дёшевы
+        // и подсказывают человеку, каким входом попробовать.
         ping(APEX, 'apex');
-        ping(COMS, 'coms');
+        if (location.protocol === 'http:' || location.protocol === 'https:') {
+          ping(COMS, 'coms');
+        }
 
         setTimeout(function () {
           if (booted) return;
