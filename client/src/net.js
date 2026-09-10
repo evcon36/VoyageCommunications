@@ -71,6 +71,32 @@ function useOrigin(origin) {
   current = origin;
   try { sessionStorage.setItem(STORE_KEY, origin); } catch { /* приватный режим */ }
   for (const fn of listeners) { try { fn(origin); } catch { /* слушатель не должен ломать переключение */ } }
+  scheduleComeback();
+}
+
+// Возвращение на главный вход.
+//
+// Запасной вход выбирался на один сетевой сбой, а жил до полного перезапуска
+// приложения. На мобильном интернете это оказалось хуже самого сбоя: запасной
+// вход через Cloudflare у оператора не заблокирован, он отвечает — но по
+// восемь секунд на запрос. Приложение переезжало туда из-за одной осечки и
+// выглядело мёртвым, хотя формально работало. Человек видел «первый раз
+// открывается, а потом только через VPN»: пока приложение не закрыто и не
+// открыто заново, выбор входа никто не пересматривал.
+//
+// Поэтому, уйдя с главного входа, регулярно проверяем, не ожил ли он.
+const COMEBACK_MS = 30000;
+let comebackTimer = null;
+function scheduleComeback() {
+  if (comebackTimer || current === CANDIDATES[0]) return;
+  comebackTimer = setInterval(() => {
+    if (current === CANDIDATES[0]) {
+      clearInterval(comebackTimer);
+      comebackTimer = null;
+      return;
+    }
+    pickOrigin();
+  }, COMEBACK_MS);
 }
 
 // Отличаем «сеть не дошла» от «сервер ответил ошибкой». Переключаться имеет
@@ -144,7 +170,11 @@ export function pickOrigin() {
       // Заблокированный вход отдаёт свою страницу-заглушку, и это тоже
       // успешный ответ: он выигрывал гонку, после чего всё приложение
       // ходило в никуда.
-      fetch(`${origin}/rooms/guest-info/__probe__`, { signal: ctrl.signal })
+      // Проверка живости не должна отвечать из кэша: закэшированный ответ
+      // либо выигрывает гонку, не сходив в сеть, либо приходит как 304 без
+      // тела и считается чужим. И то и другое — ложный вывод о входе.
+      fetch(`${origin}/rooms/guest-info/__probe__?t=${Date.now()}`,
+            { cache: 'no-store', signal: ctrl.signal })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error('чужой ответ'))))
         .then((d) => (d && typeof d === 'object' && 'exists' in d
           ? won(origin)
