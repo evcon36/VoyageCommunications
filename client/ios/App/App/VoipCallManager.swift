@@ -82,7 +82,7 @@ final class VoipCallManager: NSObject {
             else { continue }
             let host = URL(string: origin)?.host ?? origin
             var req = URLRequest(url: url)
-            req.timeoutInterval = 12
+            req.timeoutInterval = 30   // соединение на мобильном может устанавливаться секундами
             req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
             let started = Date()
             URLSession.shared.dataTask(with: req) { [weak self] _, resp, err in
@@ -187,7 +187,7 @@ final class VoipCallManager: NSObject {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
-        req.timeoutInterval = 8
+        req.timeoutInterval = 20
         URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
             guard let self = self else { return }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0

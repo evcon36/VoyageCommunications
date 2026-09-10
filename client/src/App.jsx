@@ -876,13 +876,13 @@ export default function App() {
     // по очереди. Раньше перебор шёл последовательно, и когда первый вход у
     // оператора молчал, запуск упирался в его полный таймаут — отсюда десять
     // секунд тишины на экране проверки.
-    try { await withDeadline(pickOrigin(), 8000, 'выбор входа'); }
+    try { await withDeadline(pickOrigin(), 15000, 'выбор входа'); }
     catch { /* не выбрали — пойдём по текущему, он всё равно проставлен */ }
     const token = localStorage.getItem('token');
     if (!token) { setAuthChecked(true); return; }
     setAuthNetError(false);
     try {
-      const result = await withDeadline(getMe(token), 20000, 'проверка входа');
+      const result = await withDeadline(getMe(token), 60000, 'проверка входа');
       setAuthUser(result.user);
       setUserName(result.user.displayName || result.user.username || 'Иван');
       // дефолтный ID комнаты: ник + 3 случайные цифры (если не пришли по ссылке)
