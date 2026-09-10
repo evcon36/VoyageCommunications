@@ -248,6 +248,26 @@ final class VoipCallManager: NSObject {
         post(.voipAppActive, [:])
     }
 
+    // Запрос к серверу системной сетью, в обход веб-слоя.
+    //
+    // Причина: на телефоне владельца сетевой движок WebView до сервера не
+    // доставал, а системная сеть в ту же секунду отвечала за 288 мс. Это
+    // видно в дневнике: нативная самопроверка входа проходит, а запрос
+    // веб-слоя до сервера не доходит вовсе. CapacitorHttp, который должен
+    // делать ровно это, в Capacitor 8.5 подмену не выполняет — проверено
+    // сборкой с включённой настройкой: запросы всё равно уходят движком
+    // WebKit. Поэтому ведём их сами.
+    func perform(_ req: URLRequest, completion: @escaping (Int, String, String?) -> Void) {
+        net.dataTask(with: req) { data, resp, err in
+            if let err = err as NSError? {
+                completion(0, "", "\(err.domain) \(err.code): \(err.localizedDescription)")
+                return
+            }
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            completion(code, String(data: data ?? Data(), encoding: .utf8) ?? "", nil)
+        }.resume()
+    }
+
     // Забирает и очищает то, что накопилось, пока JS не был готов слушать.
     func takePendingCall() -> [String: Any]? {
         defer { pendingCall = nil }

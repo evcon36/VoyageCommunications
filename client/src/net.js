@@ -200,8 +200,11 @@ export function pickOrigin() {
       // Проверка живости не должна отвечать из кэша: закэшированный ответ
       // либо выигрывает гонку, не сходив в сеть, либо приходит как 304 без
       // тела и считается чужим. И то и другое — ложный вывод о входе.
-      fetch(`${origin}/rooms/guest-info/__probe__?t=${Date.now()}`,
-            { cache: 'no-store', signal: ctrl.signal })
+      // Через tryOnce, а не голым fetch: на телефоне это уводит проверку в
+      // системную сеть. Иначе живость входа проверялась бы движком веб-слоя,
+      // а ходили бы туда потом системной сетью — то есть проверялось бы не то.
+      tryOnce(origin, `/rooms/guest-info/__probe__?t=${Date.now()}`,
+              { cache: 'no-store', signal: ctrl.signal }, FIRST_TRY_MS)
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error('чужой ответ'))))
         .then((d) => (d && typeof d === 'object' && 'exists' in d
           ? won(origin)
@@ -224,7 +227,63 @@ function timedOut() {
   return e;
 }
 
+// Запрос системной сетью телефона вместо сетевого движка веб-слоя.
+//
+// На телефоне владельца движок WebView до сервера не доставал, а системная
+// сеть в ту же секунду отвечала за 288 мс — это видно в дневнике: нативная
+// самопроверка входа проходит, запрос веб-слоя не доходит вовсе. Штатный
+// CapacitorHttp, который должен подменять fetch, в Capacitor 8.5 этого не
+// делает (проверено сборкой с включённой настройкой), поэтому зовём наш
+// нативный слой напрямую.
+//
+// Отправку файлов оставляем веб-слою: тело FormData через мост не передать.
+const IS_NATIVE_APP = Boolean(globalThis.Capacitor?.isNativePlatform?.());
+let nativeHttp = null;
+if (IS_NATIVE_APP) {
+  try {
+    nativeHttp = globalThis.Capacitor?.registerPlugin?.('Voip') || null;
+  } catch { nativeHttp = null; }
+}
+
+function canGoNative(init) {
+  return Boolean(nativeHttp?.request)
+    && !(init?.body instanceof FormData)
+    && !(init?.body instanceof Blob);
+}
+
+// Ответ нативного слоя приводим к виду, который ждёт остальной код
+function asResponse(status, body) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => JSON.parse(body || '{}'),
+    text: async () => body || '',
+  };
+}
+
 async function tryOnce(origin, path, init, timeoutMs = TIMEOUT_MS) {
+  if (canGoNative(init)) {
+    try {
+      const r = await nativeHttp.request({
+        url: `${origin}${path}`,
+        method: String(init?.method || 'GET').toUpperCase(),
+        headers: init?.headers || {},
+        body: typeof init?.body === 'string' ? init.body : undefined,
+        timeout: Math.round(timeoutMs / 1000),
+      });
+      return asResponse(r?.status ?? 0, r?.body ?? '');
+    } catch (e) {
+      // Нативный слой отказал — ошибку выдаём как сетевую, чтобы верхний
+      // слой попробовал другой вход, а не показал «ошибка сервера»
+      const err = new Error(String(e?.message || e));
+      err.name = 'TimeoutError';
+      throw err;
+    }
+  }
+  return webFetch(origin, path, init, timeoutMs);
+}
+
+async function webFetch(origin, path, init, timeoutMs = TIMEOUT_MS) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   // В приложении на телефоне запросы идут через системную сеть, а не через

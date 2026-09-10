@@ -14,6 +14,7 @@ public class VoipPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "endCall", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "note", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "request", returnType: CAPPluginReturnPromise),
     ]
 
     override public func load() {
@@ -60,6 +61,29 @@ public class VoipPlugin: CAPPlugin, CAPBridgedPlugin {
     // JS вообще успел загрузиться.
     @objc func getPendingCall(_ call: CAPPluginCall) {
         call.resolve(VoipCallManager.shared.takePendingCall() ?? [:])
+    }
+
+    // Запрос к серверу системной сетью. Веб-слой зовёт это вместо fetch:
+    // его собственный сетевой движок до сервера доходит не всегда, а этот —
+    // тот же, которым пользуется весь остальной телефон.
+    @objc func request(_ call: CAPPluginCall) {
+        guard let urlStr = call.getString("url"), let url = URL(string: urlStr) else {
+            call.reject("нет адреса"); return
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = call.getString("method") ?? "GET"
+        req.timeoutInterval = call.getDouble("timeout") ?? 30
+        req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        if let headers = call.getObject("headers") {
+            for (key, value) in headers {
+                if let text = value as? String { req.setValue(text, forHTTPHeaderField: key) }
+            }
+        }
+        if let body = call.getString("body") { req.httpBody = body.data(using: .utf8) }
+        VoipCallManager.shared.perform(req) { status, text, error in
+            if let error = error { call.reject(error); return }
+            call.resolve(["status": status, "body": text])
+        }
     }
 
     @objc private func onTokenUpdated(_ note: Notification) {
