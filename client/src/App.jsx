@@ -47,11 +47,27 @@ pickOrigin().then((origin) => {
 // подключение пересматриваем выбор входа; если он сменится, сокет переедет
 // сам — обработчиком ниже.
 let lastReprobe = 0;
-socket.on('connect_error', () => {
+let socketFailures = 0;
+socket.on('connect_error', (e) => {
+  // Сокет — единственное, что осталось на сетевом движке веб-слоя: вебсокет
+  // через системную сеть не провести. Поэтому о его отказах надо узнавать
+  // отдельно, иначе это слепое пятно: запросы проходят, а звонки не идут.
+  socketFailures++;
+  if (socketFailures <= 3 || socketFailures % 10 === 0) {
+    voipPlugin()?.note?.({
+      text: `сокет не подключился (${socketFailures}): ${String(e?.message || e).slice(0, 90)}`,
+    }).catch(() => {});
+  }
   const now = Date.now();
   if (now - lastReprobe < 15000) return;   // не чаще раза в 15 секунд
   lastReprobe = now;
   pickOrigin().catch(() => { /* не вышло — сокет продолжит свои попытки сам */ });
+});
+socket.on('connect', () => {
+  if (socketFailures) {
+    voipPlugin()?.note?.({ text: `сокет подключился после ${socketFailures} отказов` }).catch(() => {});
+    socketFailures = 0;
+  }
 });
 
 // Если запросы к серверу переехали на другой вход, сокет обязан переехать
