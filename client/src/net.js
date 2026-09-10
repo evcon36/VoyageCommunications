@@ -210,7 +210,12 @@ async function tryOnce(origin, path, init, timeoutMs = TIMEOUT_MS) {
   });
   try {
     return await Promise.race([
-      fetch(`${origin}${path}`, { ...init, signal: init?.signal || ctrl.signal }),
+      // no-store, потому что ответы API кэшировать незачем, а вред от этого
+      // был прямой: закэшированный ответ телефон переспрашивал условным
+      // запросом и получал 304 — законный ответ без тела, который обёртка
+      // запросов считает отказом сервера. Приложение писало «нет связи с
+      // сервером» при живом сервере, ровно со второго холодного запуска.
+      fetch(`${origin}${path}`, { cache: 'no-store', ...init, signal: init?.signal || ctrl.signal }),
       hardLimit,
     ]);
   } finally {
@@ -228,6 +233,12 @@ async function tryOnce(origin, path, init, timeoutMs = TIMEOUT_MS) {
 // поверх первой, и человек видел ошибку при работающей записи.
 //
 // timeout: сколько ждать ответа. retry: можно ли повторять на другом входе.
+// 304 «не изменилось» приходит без тела, и работать с ним верхний слой не
+// умеет: он ждёт JSON. Считаем такой ответ негодным и пробуем другой вход —
+// как и заглушку блокировщика (5xx). Запросы идут с no-store, поэтому 304
+// прийти не должен вовсе, но проверка стоит одну строку.
+const unusable = (resp) => resp.status === 304 || (resp.status >= 502 && resp.status <= 599);
+
 // Все входы сразу, побеждает первый ответивший. Только для чтения: один и
 // тот же GET можно отправить хоть всем сразу, запись — нельзя.
 function raceOrigins(origins, path, init, wait) {
@@ -238,11 +249,8 @@ function raceOrigins(origins, path, init, wait) {
     for (const origin of origins) {
       tryOnce(origin, path, init, wait || TIMEOUT_MS)
         .then((resp) => {
-          // Заглушки блокировщиков и сбои посредника приходят кодами 5xx —
-          // это не ответ нашего сервера, пусть выигрывает кто-то другой
-          if (resp.status >= 502 && resp.status <= 599) {
-            throw new Error(`вход ответил ${resp.status}`);
-          }
+          // Не ответ нашего сервера — пусть выигрывает кто-то другой
+          if (unusable(resp)) throw new Error(`вход ответил ${resp.status}`);
           if (done) return;
           done = true;
           if (origin !== current) useOrigin(origin);
@@ -284,7 +292,7 @@ export async function apiFetch(path, init, opts = {}) {
   if (isRead && allowRetry && order.length > 1) {
     try {
       const resp = await tryOnce(current, path, init, wait || FIRST_TRY_MS);
-      if (!(resp.status >= 502 && resp.status <= 599)) return resp;
+      if (!unusable(resp)) return resp;
     } catch (e) {
       if (!isNetworkFailure(e)) throw e;   // не сетевая — другой вход не поможет
     }
@@ -300,7 +308,7 @@ export async function apiFetch(path, init, opts = {}) {
       // Заглушки блокировщиков и сбои посредника приходят кодами 5xx. Это не
       // ответ нашего сервера, поэтому пробуем следующий вход, а не показываем
       // человеку ошибку.
-      if (!isLast && resp.status >= 502 && resp.status <= 599) {
+      if (!isLast && unusable(resp)) {
         lastError = new Error(`вход ответил ${resp.status}`);
         continue;
       }
