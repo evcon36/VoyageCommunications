@@ -116,24 +116,42 @@ final class VoipCallManager: NSObject {
     // незаметным: он служебный и не вправе мешать работе.
     private var flushScheduled = false
     private var flushing = false
+    private var flushStartedAt: Date?
     private var pauseUntil: Date?
 
+    // Всё хозяйство дневника ведём в одном потоке.
+    //
+    // Самопроверка входов пишет из трёх фоновых потоков сразу, и без этого
+    // флаг «отправка идёт» мог остаться поднятым навсегда: тогда дневник
+    // замолкал целиком — ровно в тот момент, когда он и нужен.
     func log(_ name: String, _ detail: String = "") {
         let stamp = ISO8601DateFormatter().string(from: Date())
-        var events = UserDefaults.standard.array(forKey: logKey) as? [[String: String]] ?? []
-        events.append(["at": stamp, "name": name, "detail": detail])
-        if events.count > 40 { events.removeFirst(events.count - 40) }
-        UserDefaults.standard.set(events, forKey: logKey)
         print("VOIP: \(name) \(detail)")
-        scheduleFlush()
+        onMain {
+            var events = UserDefaults.standard.array(forKey: self.logKey) as? [[String: String]] ?? []
+            events.append(["at": stamp, "name": name, "detail": detail])
+            if events.count > 40 { events.removeFirst(events.count - 40) }
+            UserDefaults.standard.set(events, forKey: self.logKey)
+            self.scheduleFlush()
+        }
+    }
+
+    private func onMain(_ work: @escaping () -> Void) {
+        if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
     }
 
     private func scheduleFlush() {
         guard !flushScheduled else { return }
         flushScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-            self?.flushScheduled = false
-            self?.flushLog()
+            guard let self = self else { return }
+            self.flushScheduled = false
+            // Страховка от зависшей отправки: если ответа так и не было
+            // дольше минуты, считаем её потерянной и пробуем заново.
+            if self.flushing, let since = self.flushStartedAt, Date().timeIntervalSince(since) > 60 {
+                self.flushing = false
+            }
+            self.flushLog()
         }
     }
 
@@ -158,6 +176,7 @@ final class VoipCallManager: NSObject {
         guard let body = try? JSONSerialization.data(withJSONObject: ["token": token, "events": events])
         else { return }
         flushing = true
+        flushStartedAt = Date()
         send(body, sent: events.count, origins: logOrigins[...])
     }
 
@@ -172,6 +191,7 @@ final class VoipCallManager: NSObject {
         URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
             guard let self = self else { return }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            self.onMain {
             // Чистим только то, что сервер точно принял: иначе при обрыве
             // связи записи пропадут, а они и нужны как раз в такие моменты.
             if code == 200 {
@@ -191,6 +211,7 @@ final class VoipCallManager: NSObject {
                 self.send(body, sent: sent, origins: origins.dropFirst())
             } else {
                 self.flushing = false   // записи остались на диске, уйдут позже
+            }
             }
         }.resume()
     }

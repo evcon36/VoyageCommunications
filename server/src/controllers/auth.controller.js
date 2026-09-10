@@ -225,7 +225,10 @@ async function voipLog(req, res) {
     }
     for (const e of list) {
       const at = String(e?.at || '').slice(0, 30);
-      const name = String(e?.name || '?').slice(0, 40);
+      // 200, а не 40: на сорока обрезалось самое важное — вместо
+      // «не открылось: вход X, TypeError: ...» в логах оставалось
+      // «не открылось: вход voyage-community» без причины.
+      const name = String(e?.name || '?').slice(0, 200);
       const detail = String(e?.detail || '').slice(0, 200);
       console.log(`VOIP NATIVE [${who}] ${at} ${name}${detail ? ' — ' + detail : ''}`);
     }
