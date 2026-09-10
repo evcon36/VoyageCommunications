@@ -1,5 +1,6 @@
 import UIKit
 import Capacitor
+import WebKit
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -10,8 +11,33 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // Не лениво: PushKit может разбудить приложение VoIP-пушем ещё до
         // того, как пользователь его откроет — слушатель должен быть готов
         // с самого запуска, а не заводиться где-то по требованию из JS.
+        clearNetworkCaches()
         VoipCallManager.shared.setup()
         return true
+    }
+
+    // Сеть начинает каждый запуск с чистого листа.
+    //
+    // Основание — наблюдение владельца, самое ценное за весь разбор:
+    // после переустановки приложение на мобильном интернете входит, после
+    // обычного перезапуска — нет. Оператор о переустановке ничего не знает,
+    // значит, мешает что-то, что остаётся в самом приложении между
+    // запусками. Из сетевого состояния приложения переустановка стирает
+    // прежде всего кэши запросов — их и чистим.
+    //
+    // Трогаем только кэши. Хранилище страницы (localStorage) не трогаем:
+    // там лежит токен входа, и его потеря выкинула бы человека из аккаунта.
+    private func clearNetworkCaches() {
+        URLCache.shared.removeAllCachedResponses()
+        let types: Set<String> = [
+            WKWebsiteDataTypeDiskCache,
+            WKWebsiteDataTypeMemoryCache,
+            WKWebsiteDataTypeFetchCache,
+            WKWebsiteDataTypeOfflineWebApplicationCache,
+        ]
+        WKWebsiteDataStore.default().removeData(ofTypes: types, modifiedSince: .distantPast) {
+            VoipCallManager.shared.log("кэши запросов очищены")
+        }
     }
 
     func applicationWillResignActive(_ application: UIApplication) {

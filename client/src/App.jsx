@@ -904,7 +904,7 @@ export default function App() {
         // мёртвый вход. Без этого «не открывается» не оставляло следов
         // вообще: до сервера не доходило ни одного запроса.
         voipPlugin()?.note?.({
-          text: `не открылось: вход ${entrance}, ${String(e?.message || e).slice(0, 80)}`,
+          text: `не открылось: вход ${entrance}, ${e?.detail || String(e?.message || e).slice(0, 120)}`,
         }).catch(() => {});
         setAuthNetError(true);
         setAuthChecked(true);

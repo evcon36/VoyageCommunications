@@ -60,10 +60,41 @@ final class VoipCallManager: NSObject {
         registry.delegate = self
         registry.desiredPushTypes = [.voIP]
         log("старт", "состояние \(appStateName())")
+        checkOrigins()
         NotificationCenter.default.addObserver(
             self, selector: #selector(onDidBecomeActive),
             name: UIApplication.didBecomeActiveNotification, object: nil)
         scheduleDebugCallIfRequested()
+    }
+
+    // Самопроверка входов средствами системы, а не веб-слоя.
+    //
+    // Веб-слой при отказе говорит только «нет соединения»: настоящую ошибку
+    // он теряет по дороге. А здесь работает системная сеть, та же, что у
+    // всего остального в телефоне, и она называет причину точно: закрыт ли
+    // адрес, оборвалось ли соединение, не сошёлся ли сертификат.
+    //
+    // Дневник умеет уходить через любой из входов, поэтому итог доедет до
+    // сервера даже тогда, когда часть входов молчит.
+    private func checkOrigins() {
+        for origin in logOrigins {
+            guard let url = URL(string: origin + "/rooms/guest-info/__probe__?t=\(Int(Date().timeIntervalSince1970))")
+            else { continue }
+            let host = URL(string: origin)?.host ?? origin
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 12
+            req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            let started = Date()
+            URLSession.shared.dataTask(with: req) { [weak self] _, resp, err in
+                let ms = Int(Date().timeIntervalSince(started) * 1000)
+                if let err = err as NSError? {
+                    self?.log("вход \(host)", "ошибка \(err.domain) \(err.code): \(err.localizedDescription), \(ms) мс")
+                } else {
+                    let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                    self?.log("вход \(host)", "ответ \(code), \(ms) мс")
+                }
+            }.resume()
+        }
     }
 
     // ── Дневник звонка ────────────────────────────────────────────────────

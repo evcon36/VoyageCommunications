@@ -10,10 +10,14 @@ async function apiFetch(path, options = {}) {
   try {
     response = await request(path, options);
   } catch (e) {
+    // Настоящий текст ошибки сохраняем отдельно: человеку он не нужен, а в
+    // разборе без него видно только «нет соединения», что не говорит ничего.
+    const detail = `${e?.name || 'Error'}: ${String(e?.message || e).slice(0, 120)}`;
+    const wrap = (msg) => { const w = new Error(msg); w.detail = detail; return w; };
     if (e?.name === 'AbortError' || e?.name === 'TimeoutError') {
-      throw new Error('Сервер не отвечает — проверьте интернет и попробуйте ещё раз');
+      throw wrap('Сервер не отвечает — проверьте интернет и попробуйте ещё раз');
     }
-    throw new Error('Нет соединения с сервером — проверьте интернет');
+    throw wrap('Нет соединения с сервером — проверьте интернет');
   }
   // 304 — «не изменилось», законный ответ, но тела у него нет и в 200-ю серию
   // он не попадает. Раньше он превращался здесь в «ошибку сервера», и вход в
