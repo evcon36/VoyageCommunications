@@ -237,12 +237,17 @@ function asResponse(status, body) {
 async function tryOnce(origin, path, init, timeoutMs = TIMEOUT_MS) {
   if (canGoNative(init)) {
     try {
+      // Срок на ОДНУ попытку короткий, а попыток много: нативный слой сам
+      // бросает зависшее соединение и открывает новое. Смысл в этом, а не в
+      // терпении — рукопожатие на мобильном интернете либо проходит сразу,
+      // либо не пройдёт вовсе.
       const r = await nativeHttp.request({
         url: `${origin}${path}`,
         method: String(init?.method || 'GET').toUpperCase(),
         headers: init?.headers || {},
         body: typeof init?.body === 'string' ? init.body : undefined,
-        timeout: Math.round(timeoutMs / 1000),
+        timeout: 3,
+        attempts: Math.max(3, Math.min(18, Math.round(timeoutMs / 2000))),
       });
       return asResponse(r?.status ?? 0, r?.body ?? '');
     } catch (e) {

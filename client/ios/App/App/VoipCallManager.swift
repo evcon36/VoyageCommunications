@@ -20,12 +20,22 @@ final class VoipCallManager: NSObject {
     // URLSession.shared при холодном запуске отвечает «интернет отсутствует»
     // мгновенно, не выходя в сеть: радиомодуль ещё спит. waitsForConnectivity
     // заставляет её подождать появления связи вместо мгновенного отказа.
-    private lazy var net: URLSession = {
-        let cfg = URLSessionConfiguration.default
-        cfg.waitsForConnectivity = true
-        cfg.timeoutIntervalForResource = 60
+    private lazy var net: URLSession = makeSession()
+
+    private func makeSession() -> URLSession {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.waitsForConnectivity = false   // ждать нечего: лучше бросить и повторить
+        cfg.timeoutIntervalForResource = 20
+        // Не больше двух соединений на адрес.
+        //
+        // Каждое новое соединение — это новое рукопожатие, а на мобильном
+        // интернете удаётся примерно одно из девяти. Шесть параллельных
+        // соединений означали бы шесть рукопожатий, и вероятность, что
+        // получатся все, близка к нулю. Двух достаточно: как только одно
+        // встало, по нему пойдут все запросы подряд.
+        cfg.httpMaximumConnectionsPerHost = 2
         return URLSession(configuration: cfg)
-    }()
+    }
 
     private let registry = PKPushRegistry(queue: .main)
     private let provider: CXProvider
@@ -270,9 +280,35 @@ final class VoipCallManager: NSObject {
     // делать ровно это, в Capacitor 8.5 подмену не выполняет — проверено
     // сборкой с включённой настройкой: запросы всё равно уходят движком
     // WebKit. Поэтому ведём их сами.
-    func perform(_ req: URLRequest, completion: @escaping (Int, String, String?) -> Void) {
-        net.dataTask(with: req) { data, resp, err in
+    func perform(_ req: URLRequest, attemptsLeft: Int = 8,
+                 completion: @escaping (Int, String, String?) -> Void) {
+        net.dataTask(with: req) { [weak self] data, resp, err in
             if let err = err as NSError? {
+                // Зависшее соединение не ждём, а бросаем и открываем новое.
+                //
+                // На мобильном интернете приветствие TLS айфона не влезает в
+                // один пакет и режется надвое, а хвост по дороге теряется. По
+                // записи пакетов: из 45 соединений рукопожатие удалось пяти.
+                // То есть связь работает, просто одна попытка из девяти. Ждать
+                // обречённое соединение бессмысленно — надо быстро пробовать
+                // заново, каждый раз новым соединением.
+                let worthRetry = err.domain == NSURLErrorDomain && [
+                    NSURLErrorTimedOut,
+                    NSURLErrorNetworkConnectionLost,
+                    NSURLErrorNotConnectedToInternet,
+                    NSURLErrorCannotConnectToHost,
+                    NSURLErrorSecureConnectionFailed,
+                ].contains(err.code)
+                if worthRetry, attemptsLeft > 1, let self = self {
+                    // Набор соединений НЕ сбрасываем: зависшее рукопожатие в
+                    // него и не попало, а живое соединение нам дороже всего —
+                    // по нему поедут все остальные запросы без нового
+                    // рукопожатия.
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+                        self.perform(req, attemptsLeft: attemptsLeft - 1, completion: completion)
+                    }
+                    return
+                }
                 completion(0, "", "\(err.domain) \(err.code): \(err.localizedDescription)")
                 return
             }
@@ -280,6 +316,8 @@ final class VoipCallManager: NSObject {
             completion(code, String(data: data ?? Data(), encoding: .utf8) ?? "", nil)
         }.resume()
     }
+
+
 
     // Забирает и очищает то, что накопилось, пока JS не был готов слушать.
     func takePendingCall() -> [String: Any]? {
