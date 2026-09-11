@@ -35,10 +35,20 @@ const socket = io(serverUrl(), {
   transports: IS_IOS_APP ? ['websocket'] : ['websocket', 'polling'],
   autoConnect: false,
 });
-pickOrigin().then((origin) => {
-  try { socket.io.uri = origin; socket.io.opts.host = undefined; } catch { /* адрес не сменился */ }
-  socket.connect();
-});
+// Сокет подключаем не сразу, а после того, как приложение открылось.
+//
+// Его рукопожатие соревновалось за канал с проверкой входа: на мобильном
+// интернете два одновременных рукопожатия — это две попытки вместо одной, и
+// обе могут не пройти. Сначала пусть откроется приложение, потом сокет.
+let socketStarted = false;
+function startSocket() {
+  if (socketStarted) return;
+  socketStarted = true;
+  pickOrigin().then((origin) => {
+    try { socket.io.uri = origin; socket.io.opts.host = undefined; } catch { /* адрес не сменился */ }
+    socket.connect();
+  });
+}
 
 // Вход мог умереть уже после того, как его выбрали: оператор режет соединение
 // не в момент запуска, а когда придётся. Сокет сам этого не переживает — он
@@ -895,7 +905,7 @@ export default function App() {
     try { await withDeadline(pickOrigin(), 15000, 'выбор входа'); }
     catch { /* не выбрали — пойдём по текущему, он всё равно проставлен */ }
     const token = localStorage.getItem('token');
-    if (!token) { setAuthChecked(true); return; }
+    if (!token) { setAuthChecked(true); startSocket(); return; }
     setAuthNetError(false);
     try {
       const result = await withDeadline(getMe(token), 60000, 'проверка входа');
@@ -904,6 +914,7 @@ export default function App() {
       // дефолтный ID комнаты: ник + 3 случайные цифры (если не пришли по ссылке)
       setRoomId(prev => prev || `${result.user.username}-${Math.floor(100 + Math.random() * 900)}`);
       setAuthChecked(true);
+      startSocket();   // канал освободился — теперь можно и сокет
     } catch (e) {
       if (e.status === 401) {
         // токен реально недействителен — только тогда выходим
@@ -911,6 +922,7 @@ export default function App() {
         setAuthUser(null);
         setAuthError('Сессия истекла. Войдите снова.');
         setAuthChecked(true);
+        startSocket();
       } else {
         // сеть моргнула — токен НЕ трогаем, предлагаем повторить
         const entrance = (() => { try { return new URL(serverUrl()).host; } catch { return '?'; } })();
@@ -924,6 +936,7 @@ export default function App() {
         }).catch(() => {});
         setAuthNetError(true);
         setAuthChecked(true);
+        startSocket();
       }
     }
   }, []);
