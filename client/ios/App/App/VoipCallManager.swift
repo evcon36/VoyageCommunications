@@ -28,7 +28,7 @@ final class VoipCallManager: NSObject {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.waitsForConnectivity = false
         cfg.timeoutIntervalForResource = 30
-        cfg.httpMaximumConnectionsPerHost = 1
+        cfg.httpMaximumConnectionsPerHost = 4   // хватает на пачку попыток
         return URLSession(configuration: cfg)
     }()
 
@@ -268,8 +268,90 @@ final class VoipCallManager: NSObject {
         performOn(net, req, attemptsLeft: attemptsLeft, completion: completion)
     }
 
+    // Попытки идут пачкой, а не по очереди.
+    //
+    // Рукопожатие на мобильном интернете срывается примерно в пяти случаях из
+    // шести: у приветствия TLS теряется хвост, и соединение не завершится
+    // никогда. По очереди на это уходило девять секунд — семь попыток по
+    // 1,3 секунды. Три одновременные попытки дают втрое больший шанс на круг,
+    // а лишние обрываются, как только одна прошла.
+    //
+    // Три, а не десять: лавина одновременных соединений на этой сети топит
+    // сама себя, это мы уже проходили. Три — середина между «слишком долго»
+    // и «слишком много».
+    private static let hedgeSize = 3
+
+    // Соединение открыто — пачка больше не нужна.
+    //
+    // Пока его нет, три одновременные попытки втрое повышают шанс пробиться.
+    // Как только одна прошла, URLSession держит соединение открытым, и все
+    // следующие запросы идут по нему без нового рукопожатия. Повторять их
+    // пачкой было бы чистым вредом: на быстрой сети сервер получал каждый
+    // запрос трижды.
+    private var connectionWarm = false
+
+    private func hedgeCount(for req: URLRequest) -> Int {
+        // Только для чтения: повторять запись нельзя, три «создать комнату»
+        // создали бы три комнаты.
+        let method = (req.httpMethod ?? "GET").uppercased()
+        guard method == "GET", !connectionWarm else { return 1 }
+        return Self.hedgeSize
+    }
+
     private func performOn(_ session: URLSession, _ req: URLRequest, attemptsLeft: Int,
                            completion: @escaping (Int, String, String?) -> Void) {
+        let lockRound = NSLock()
+        var roundDone = false
+        var tasks: [URLSessionDataTask] = []
+        let deadline = max(0.5, req.timeoutInterval)
+
+        // Победитель круга отдаёт ответ и гасит остальных
+        let winner: (Int, String, String?) -> Void = { code, body, error in
+            lockRound.lock()
+            let already = roundDone
+            roundDone = true
+            let toCancel = tasks
+            lockRound.unlock()
+            if already { return }
+            for t in toCancel { t.cancel() }
+            completion(code, body, error)
+        }
+
+        let hedge = hedgeCount(for: req)
+        var failures = 0
+        for _ in 0..<hedge {
+            let task = session.dataTask(with: req) { [weak self] data, resp, err in
+                if let err = err as NSError? {
+                    lockRound.lock()
+                    failures += 1
+                    let allFailed = failures >= hedge && !roundDone
+                    lockRound.unlock()
+                    guard allFailed, let self = self else { return }
+                    if attemptsLeft > 1 {
+                        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
+                            self.performOn(session, req, attemptsLeft: attemptsLeft - 1, completion: winner)
+                        }
+                    } else {
+                        winner(0, "", "\(err.domain) \(err.code): \(err.localizedDescription)")
+                    }
+                    return
+                }
+                self?.connectionWarm = true
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                winner(code, String(data: data ?? Data(), encoding: .utf8) ?? "", nil)
+            }
+            tasks.append(task)
+            task.resume()
+        }
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + deadline) {
+            lockRound.lock(); let done = roundDone; let all = tasks; lockRound.unlock()
+            if !done { for t in all { t.cancel() } }   // круг не задался — обработчики уйдут на следующий
+        }
+    }
+
+    private func performOnOld(_ session: URLSession, _ req: URLRequest, attemptsLeft: Int,
+                              completion: @escaping (Int, String, String?) -> Void) {
         // Срок на попытку выдерживаем сами, обрывая задачу по таймеру.
         //
         // timeoutInterval в iOS — это пауза между пакетами, а не предел на
