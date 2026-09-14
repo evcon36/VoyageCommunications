@@ -50,6 +50,22 @@ function startSocket() {
   });
 }
 
+// Уходя, закрываем за собой.
+//
+// Догадка владельца, и она верная: приложение при закрытии просто исчезало, а
+// его соединения оставались висеть — на сервере их видно по семь штук с
+// одного телефона. Особенно после звонка: сокет и медиасоединение живут долго
+// и умирают по таймауту, а оператор при следующем запуске выдаёт телефону тот
+// же публичный порт. Прощаемся явно.
+window.addEventListener('pagehide', () => {
+  try { livekitRoomGlobalRef.current?.disconnect(true); } catch { /* уже мертва */ }
+  try { socket.disconnect(); } catch { /* уже закрыт */ }
+});
+
+// Ссылка на комнату для закрытия при выходе: сам объект живёт внутри
+// компонента, а прощаться надо снаружи.
+const livekitRoomGlobalRef = { current: null };
+
 // Вход мог умереть уже после того, как его выбрали: оператор режет соединение
 // не в момент запуска, а когда придётся. Сокет сам этого не переживает — он
 // бесконечно долбится в один и тот же адрес и молчит, а человек видит «нет
@@ -2783,6 +2799,7 @@ export default function App() {
         },
       });
       livekitRoomRef.current = room;
+      livekitRoomGlobalRef.current = room;   // чтобы попрощаться при выходе
 
       room.on(LK.RoomEvent.Connected, () => {
         voipPlugin()?.note?.({ text: 'вошли в комнату' }).catch(() => {});
@@ -3023,6 +3040,7 @@ export default function App() {
     joiningRef.current = false;
     const room = livekitRoomRef.current;
     livekitRoomRef.current = null;
+    livekitRoomGlobalRef.current = null;
     if (room) {
       room.removeAllListeners();
       await room.disconnect();

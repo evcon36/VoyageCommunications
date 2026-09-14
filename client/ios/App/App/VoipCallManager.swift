@@ -202,9 +202,13 @@ final class VoipCallManager: NSObject {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
         req.timeoutInterval = 20
-        diaryNet.dataTask(with: req) { [weak self] _, resp, _ in
+        // Через тот же перебор попыток, что и запросы приложения: одной
+        // попытки на этой сети не хватает, и дневник переставал доходить —
+        // ровно тогда, когда нужен. Сессия у него своя, очередь приложения
+        // он не занимает.
+        req.timeoutInterval = 1.5
+        performOn(diaryNet, req, attemptsLeft: 6) { [weak self] code, _, _ in
             guard let self = self else { return }
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             self.onMain {
             // Чистим только то, что сервер точно принял: иначе при обрыве
             // связи записи пропадут, а они и нужны как раз в такие моменты.
@@ -227,7 +231,7 @@ final class VoipCallManager: NSObject {
                 self.flushing = false   // записи остались на диске, уйдут позже
             }
             }
-        }.resume()
+        }
     }
 
     private func appStateName() -> String {
@@ -261,7 +265,28 @@ final class VoipCallManager: NSObject {
     // WebKit. Поэтому ведём их сами.
     func perform(_ req: URLRequest, attemptsLeft: Int = 20,
                  completion: @escaping (Int, String, String?) -> Void) {
-        net.dataTask(with: req) { [weak self] data, resp, err in
+        performOn(net, req, attemptsLeft: attemptsLeft, completion: completion)
+    }
+
+    private func performOn(_ session: URLSession, _ req: URLRequest, attemptsLeft: Int,
+                           completion: @escaping (Int, String, String?) -> Void) {
+        // Срок на попытку выдерживаем сами, обрывая задачу по таймеру.
+        //
+        // timeoutInterval в iOS — это пауза между пакетами, а не предел на
+        // установку соединения: зависшее рукопожатие он не обрывает. Из-за
+        // этого укорачивание срока с двух секунд до 1,2 почти не ускорило
+        // запуск — попытки всё равно висели дольше. Теперь обрываем руками.
+        var task: URLSessionDataTask?
+        var finished = false
+        let deadline = max(0.5, req.timeoutInterval)
+        let lock = NSLock()
+        let finishOnce: (Int, String, String?) -> Void = { code, body, error in
+            lock.lock(); let already = finished; finished = true; lock.unlock()
+            if already { return }
+            completion(code, body, error)
+        }
+
+        task = session.dataTask(with: req) { [weak self] data, resp, err in
             if let err = err as NSError? {
                 // Зависшее соединение не ждём, а бросаем и открываем новое.
                 //
@@ -278,22 +303,28 @@ final class VoipCallManager: NSObject {
                     NSURLErrorCannotConnectToHost,
                     NSURLErrorSecureConnectionFailed,
                 ].contains(err.code)
-                if worthRetry, attemptsLeft > 1, let self = self {
+                let cancelled = err.domain == NSURLErrorDomain && err.code == NSURLErrorCancelled
+                if (worthRetry || cancelled), attemptsLeft > 1, let self = self {
                     // Набор соединений НЕ сбрасываем: зависшее рукопожатие в
                     // него и не попало, а живое соединение нам дороже всего —
                     // по нему поедут все остальные запросы без нового
                     // рукопожатия.
                     DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
-                        self.perform(req, attemptsLeft: attemptsLeft - 1, completion: completion)
+                        self.performOn(session, req, attemptsLeft: attemptsLeft - 1, completion: finishOnce)
                     }
                     return
                 }
-                completion(0, "", "\(err.domain) \(err.code): \(err.localizedDescription)")
+                finishOnce(0, "", "\(err.domain) \(err.code): \(err.localizedDescription)")
                 return
             }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            completion(code, String(data: data ?? Data(), encoding: .utf8) ?? "", nil)
-        }.resume()
+            finishOnce(code, String(data: data ?? Data(), encoding: .utf8) ?? "", nil)
+        }
+        task?.resume()
+        DispatchQueue.global().asyncAfter(deadline: .now() + deadline) {
+            lock.lock(); let done = finished; lock.unlock()
+            if !done { task?.cancel() }   // обрываем — обработчик выше уйдёт на повтор
+        }
     }
 
 
