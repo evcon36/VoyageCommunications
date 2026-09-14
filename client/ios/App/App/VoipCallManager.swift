@@ -259,7 +259,7 @@ final class VoipCallManager: NSObject {
     // делать ровно это, в Capacitor 8.5 подмену не выполняет — проверено
     // сборкой с включённой настройкой: запросы всё равно уходят движком
     // WebKit. Поэтому ведём их сами.
-    func perform(_ req: URLRequest, attemptsLeft: Int = 8,
+    func perform(_ req: URLRequest, attemptsLeft: Int = 20,
                  completion: @escaping (Int, String, String?) -> Void) {
         net.dataTask(with: req) { [weak self] data, resp, err in
             if let err = err as NSError? {
@@ -283,7 +283,7 @@ final class VoipCallManager: NSObject {
                     // него и не попало, а живое соединение нам дороже всего —
                     // по нему поедут все остальные запросы без нового
                     // рукопожатия.
-                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) {
                         self.perform(req, attemptsLeft: attemptsLeft - 1, completion: completion)
                     }
                     return
