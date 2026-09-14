@@ -22,10 +22,20 @@ final class VoipCallManager: NSObject {
     // заставляет её подождать появления связи вместо мгновенного отказа.
     private lazy var net: URLSession = makeSession()
 
+    // Отдельная сессия для дневника: со своим соединением он не встаёт в
+    // очередь перед запросами приложения.
+    private lazy var diaryNet: URLSession = {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.waitsForConnectivity = false
+        cfg.timeoutIntervalForResource = 30
+        cfg.httpMaximumConnectionsPerHost = 1
+        return URLSession(configuration: cfg)
+    }()
+
     private func makeSession() -> URLSession {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.waitsForConnectivity = false   // ждать нечего: лучше бросить и повторить
-        cfg.timeoutIntervalForResource = 20
+        cfg.timeoutIntervalForResource = 60   // потолком управляют короткие попытки
         // Ровно одно соединение на адрес.
         //
         // Из 45 соединений, открытых телефоном владельца, рукопожатие удалось
@@ -84,55 +94,22 @@ final class VoipCallManager: NSObject {
         registry.delegate = self
         registry.desiredPushTypes = [.voIP]
         log("старт", "состояние \(appStateName())")
-        checkOrigins()
         NotificationCenter.default.addObserver(
             self, selector: #selector(onDidBecomeActive),
             name: UIApplication.didBecomeActiveNotification, object: nil)
         scheduleDebugCallIfRequested()
     }
 
-    // Самопроверка входов средствами системы, а не веб-слоя.
+    // Самопроверка входов убрана.
     //
-    // Веб-слой при отказе говорит только «нет соединения»: настоящую ошибку
-    // он теряет по дороге. А здесь работает системная сеть, та же, что у
-    // всего остального в телефоне, и она называет причину точно: закрыт ли
-    // адрес, оборвалось ли соединение, не сошёлся ли сертификат.
+    // Она своё дело сделала — именно она показала, что системная сеть до
+    // сервера доходит, а сетевой движок веб-слоя нет. Но потом обернулась
+    // вредом: приложению разрешено одно соединение на адрес, и проверка
+    // занимала его на двадцать секунд, пока запросы приложения стояли в
+    // очереди. Ровно те двадцать секунд, за которые приложение открывалось.
     //
-    // Дневник умеет уходить через любой из входов, поэтому итог доедет до
-    // сервера даже тогда, когда часть входов молчит.
-    private func checkOrigins() {
-        // Только главный вход и только через несколько секунд после старта.
-        //
-        // Раньше проверялись все три сразу, вместе с запуском приложения. На
-        // слабом мобильном канале это добавляло три соединения к и без того
-        // большой пачке, и топило её: в дневнике владельца главный вход
-        // отвечал за 215 мс, а остальные уходили в таймауты по 38 и 60 секунд.
-        // Диагностика не вправе мешать тому, что она измеряет.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
-            self?.probe(self?.logOrigins.first ?? "")
-        }
-    }
-
-    private func probe(_ origin: String) {
-        for origin in [origin].filter({ !$0.isEmpty }) {
-            guard let url = URL(string: origin + "/rooms/guest-info/__probe__?t=\(Int(Date().timeIntervalSince1970))")
-            else { continue }
-            let host = URL(string: origin)?.host ?? origin
-            var req = URLRequest(url: url)
-            req.timeoutInterval = 30   // соединение на мобильном может устанавливаться секундами
-            req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-            let started = Date()
-            net.dataTask(with: req) { [weak self] _, resp, err in
-                let ms = Int(Date().timeIntervalSince(started) * 1000)
-                if let err = err as NSError? {
-                    self?.log("вход \(host)", "ошибка \(err.domain) \(err.code): \(err.localizedDescription), \(ms) мс")
-                } else {
-                    let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-                    self?.log("вход \(host)", "ответ \(code), \(ms) мс")
-                }
-            }.resume()
-        }
-    }
+    // Диагностика не вправе мешать тому, что измеряет. Дневник остаётся —
+    // он ходит отдельной сессией и в очередь приложения не встаёт.
 
     // ── Дневник звонка ────────────────────────────────────────────────────
     //
@@ -225,7 +202,7 @@ final class VoipCallManager: NSObject {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
         req.timeoutInterval = 20
-        net.dataTask(with: req) { [weak self] _, resp, _ in
+        diaryNet.dataTask(with: req) { [weak self] _, resp, _ in
             guard let self = self else { return }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             self.onMain {

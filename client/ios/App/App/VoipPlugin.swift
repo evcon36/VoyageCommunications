@@ -75,7 +75,7 @@ public class VoipPlugin: CAPPlugin, CAPBridgedPlugin {
         // Короткий срок на попытку — намеренно. Смысл не в терпении, а в
         // быстрой смене соединения: рукопожатие либо проходит сразу, либо
         // не пройдёт вовсе (см. perform).
-        req.timeoutInterval = call.getDouble("timeout") ?? 3
+        req.timeoutInterval = call.getDouble("timeout") ?? 2
         req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         if let headers = call.getObject("headers") {
             for (key, value) in headers {
@@ -83,7 +83,7 @@ public class VoipPlugin: CAPPlugin, CAPBridgedPlugin {
             }
         }
         if let body = call.getString("body") { req.httpBody = body.data(using: .utf8) }
-        let attempts = max(1, min(20, call.getInt("attempts") ?? 12))
+        let attempts = max(1, min(24, call.getInt("attempts") ?? 14))
         VoipCallManager.shared.perform(req, attemptsLeft: attempts) { status, text, error in
             if let error = error { call.reject(error); return }
             call.resolve(["status": status, "body": text])

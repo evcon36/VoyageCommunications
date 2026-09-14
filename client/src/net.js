@@ -246,8 +246,12 @@ async function tryOnce(origin, path, init, timeoutMs = TIMEOUT_MS) {
         method: String(init?.method || 'GET').toUpperCase(),
         headers: init?.headers || {},
         body: typeof init?.body === 'string' ? init.body : undefined,
-        timeout: 3,
-        attempts: Math.max(3, Math.min(18, Math.round(timeoutMs / 2000))),
+        // Попытка короткая, попыток много. На мобильном интернете рукопожатие
+        // срывается через раз: обречённое соединение ждать незачем, дешевле
+        // бросить и открыть новое. Две секунды — столько занимает удачное
+        // рукопожатие с запасом.
+        timeout: 2,
+        attempts: Math.max(4, Math.min(20, Math.round(timeoutMs / 1500))),
       });
       return asResponse(r?.status ?? 0, r?.body ?? '');
     } catch (e) {
