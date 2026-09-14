@@ -28,7 +28,7 @@ final class VoipCallManager: NSObject {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.waitsForConnectivity = false
         cfg.timeoutIntervalForResource = 30
-        cfg.httpMaximumConnectionsPerHost = 4   // хватает на пачку попыток
+        cfg.httpMaximumConnectionsPerHost = 1   // одна попытка за раз, см. hedgeSize
         return URLSession(configuration: cfg)
     }()
 
@@ -279,7 +279,17 @@ final class VoipCallManager: NSObject {
     // Три, а не десять: лавина одновременных соединений на этой сети топит
     // сама себя, это мы уже проходили. Три — середина между «слишком долго»
     // и «слишком много».
-    private static let hedgeSize = 3
+    // Пачка отключена: одна попытка за раз.
+    //
+    // Три одновременные попытки выглядели выигрышем по теории вероятностей и
+    // оказались провалом на деле: на сборке 125 запуск занял сорок секунд и
+    // не прошёл вовсе, тогда как при одной попытке за раз занимал девять.
+    // Это та самая лавина одновременных соединений, которая топит сама себя,
+    // — ровно то, что уже было выяснено раньше и что я здесь перешагнул.
+    //
+    // Оставляю параметром, а не вырезаю: механизм рабочий и может пригодиться
+    // на сети, где срывы редки. На этой — нет.
+    private static let hedgeSize = 1
 
     // Соединение открыто — пачка больше не нужна.
     //
