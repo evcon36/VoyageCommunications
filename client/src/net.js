@@ -172,8 +172,10 @@ export function pickOrigin() {
 // выигрывала бы гонку, после чего приложение ходило бы в никуда.
 async function probeOne(origin) {
   try {
+    // Проверке входа хватает двух попыток: она идёт рядом с работой
+    // приложения и не должна занимать соединение надолго.
     const r = await tryOnce(origin, `/rooms/guest-info/__probe__?t=${Date.now()}`,
-                            { cache: 'no-store' }, FIRST_TRY_MS);
+                            { cache: 'no-store' }, 3000);
     if (!r.ok) return false;
     const d = await r.json();
     return Boolean(d && typeof d === 'object' && 'exists' in d);
