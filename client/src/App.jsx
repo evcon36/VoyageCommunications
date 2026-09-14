@@ -34,6 +34,18 @@ const IS_IOS_APP = window.Capacitor?.getPlatform?.() === 'ios';
 const socket = io(serverUrl(), {
   transports: IS_IOS_APP ? ['websocket'] : ['websocket', 'polling'],
   autoConnect: false,
+  // Короткая попытка и частые повторы вместо долгого ожидания.
+  //
+  // По умолчанию сокет ждёт подключения 20 секунд. На мобильном интернете
+  // рукопожатие срывается примерно в пяти случаях из шести, и обречённое
+  // соединение не завершится никогда — в дневнике владельца видно десять
+  // отказов подряд по двадцать секунд каждый. Ждать бессмысленно, надо
+  // быстрее начинать следующую попытку. Удачное подключение занимает меньше
+  // секунды, так что пяти хватает с запасом.
+  timeout: 5000,
+  reconnectionDelay: 500,
+  reconnectionDelayMax: 3000,
+  randomizationFactor: 0.3,
 });
 // Сокет подключаем не сразу, а после того, как приложение открылось.
 //
@@ -2938,18 +2950,24 @@ export default function App() {
       while (true) {
         try {
           await room.connect(wsUrl, lkToken, {
-            websocketTimeout: 20000,
+            // Те же шесть секунд, что и у сокета, и по той же причине:
+            // рукопожатие либо проходит быстро, либо не пройдёт вовсе.
+            // Двадцать секунд ожидания на двух попытках давали минуту
+            // «подключаемся к комнате» и отказ — ровно то, что видел
+            // владелец. Медиа даём больше времени: там после рукопожатия
+            // идёт настоящая работа.
+            websocketTimeout: 6000,
             peerConnectionTimeout: 20000,
           });
           break;
         } catch (connErr) {
-          if (isRetriableConnect(connErr) && connectAttempts < 2) {
+          if (isRetriableConnect(connErr) && connectAttempts < 6) {
             connectAttempts++;
-            setStatus('Соединение не установилось, пробуем снова…');
+            setStatus(`Соединение не установилось, пробуем снова (${connectAttempts})…`);
             // Сначала закрываем всё, что могло остаться от неудачной попытки,
             // и только потом пробуем заново
             try { await room.disconnect(true); } catch { /* нечего закрывать */ }
-            await new Promise(r => setTimeout(r, 1500 * connectAttempts));
+            await new Promise(r => setTimeout(r, 600));
           } else {
             throw connErr;
           }
