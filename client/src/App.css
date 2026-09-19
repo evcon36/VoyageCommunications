@@ -1134,6 +1134,28 @@ input:-webkit-autofill:focus {
   .topbar-right { width: 100%; min-width: auto; }
 }
 
+/* ── Планшет ──
+   iPad вдвое шире телефона, и «телефонная» вёрстка во всю ширину
+   превращает поле для имени в строку на восемьсот пикселей, а под
+   карточкой оставляет пустой экран в половину высоты. Планшет — не
+   большой телефон: держим колонку узкой и ставим её по центру, как на
+   ноутбуке. Условие с грубым указателем оставляет правило планшетам и
+   не трогает настольный браузер, где окно и так шире. */
+@media (min-width: 700px) and (pointer: coarse) {
+  .precall-wrap {
+    max-width: 620px;
+    min-height: 100svh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  }
+  /* Колонка снова узкая, и шапке незачем ломаться на две строки:
+     правило выше (980px) разворачивает её в столбец ради телефона. */
+  .topbar { flex-direction: row; align-items: center; }
+  .topbar-right { width: auto; }
+}
+
 @media (max-width: 640px) {
   .precall-wrap { padding: 12px; }
   .call-topbar { padding: 8px 10px; }
