@@ -16,9 +16,20 @@
 
     <!-- Стили заставки идут прямо здесь: файл стилей может не доехать, а
          показать человеку хоть что-то нужно с первого кадра -->
+    <!-- Тему выбираем до первого кадра. Иначе у человека со светлой темой
+         каждый запуск начинается с тёмной вспышки заставки: React выставит
+         data-theme только когда доедет и выполнится код, а заставка рисуется
+         раньше. Тот же атрибут потом переставит React — значение то же. -->
+    <script>
+      try { document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark'); } catch (e) {}
+    </script>
     <style>
       html, body { margin: 0; height: 100%; background: #0b0b0b; color: #f4f1ea;
         font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; }
+      html[data-theme="light"], html[data-theme="light"] body { background: #eceef1; color: #171a1f; }
+      html[data-theme="light"] #boot-note { color: rgba(23,26,31,.6); }
+      html[data-theme="light"] #boot-tip { color: rgba(23,26,31,.45); }
+      html[data-theme="light"] #boot-alt a { background: #171a1f; color: #f4f1ea; }
       #boot { position: fixed; inset: 0; display: flex; flex-direction: column;
         align-items: center; justify-content: center; gap: 18px; padding: 24px;
         text-align: center; transition: opacity .2s; }

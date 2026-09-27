@@ -39,7 +39,12 @@
   color-scheme: light;
   --bg: #eceef1;
   --surface-1: #ffffff;
-  --surface-2: #ffffff;
+  /* Не белый, и это важно: поля и чипы отличаются от карточки заливкой, а не
+     рамкой (см. «Поля ввода» ниже). Пока surface-2 был таким же белым, как
+     карточка, поле на светлой теме пропадало целиком — человек видел подпись
+     «Ваше имя» и пустоту под ней. В тёмной теме тот же приём работал, потому
+     что там surface-2 и surface-1 разного тона. */
+  --surface-2: #f4f6f8;
   --surface-3: #eef0f3;
   --text: #171a1f;
   --text-dim: #5c6573;
@@ -789,7 +794,7 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
   top: var(--vv-top, 0px); left: 0; right: 0;
   height: var(--vvh, 100dvh);
   z-index: 70;
-  background: rgba(0,0,0,0.6);
+  background: var(--scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2307,7 +2312,13 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 
 /* ── Экран звонка и его панели ВСЕГДА тёмные (видео/чат лучше на чёрном),
       независимо от выбранной темы приложения. Переопределяем токены локально. ── */
-.call-fullscreen, .chat-overlay, .sounds-panel-backdrop, .sounds-panel {
+.call-fullscreen, .chat-overlay, .sounds-panel-backdrop, .sounds-panel,
+.dialing-shell, .admin-overlay {
+  /* Переназначить токены мало: color наследуется вычисленным значением, а не
+     пересчитывается. Потомки, у которых нет своего color, донаследовали тёмный
+     текст светлой темы — и заголовок «Контакты» оказывался тёмным по тёмному.
+     Поэтому панель заново применяет цвет к себе, а потомки наследуют уже его. */
+  color: var(--text);
   --text: #eef1f5;
   --text-dim: #9aa3b0;
   --surface-1: #16181d;
@@ -3101,6 +3112,20 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
    ослабляем, размытие усиливаем: поверхность начинает читаться как стекло,
    под которым живёт содержимое. Цвета те же, меняется только плотность. */
 .chat-overlay   { background: rgba(13,17,30,.72); backdrop-filter: blur(28px) saturate(160%); }
+
+/* Матовое стекло рассчитано на тёмную страницу под панелью: 72% тёмного
+   поверх тёмного читается как тёмное. В светлой теме под панелью светло, и
+   сквозь неё проступает страница — панель мутнеет, а по ней плывут жёлтые
+   пятна кнопок. Эти панели обязаны быть тёмными независимо от темы
+   (см. «Экран звонка и его панели ВСЕГДА тёмные»), поэтому в светлой теме
+   они становятся плотными: стекло здесь нечему отражать. */
+:root[data-theme="light"] .chat-overlay,
+:root[data-theme="light"] .sounds-panel {
+  background: #0d111e;
+  backdrop-filter: none;
+}
+/* Экран дозвона тоже полупрозрачный и тоже обязан быть тёмным. */
+:root[data-theme="light"] .dialing-shell { background: #08090b; }
 .sounds-panel   { background: rgba(13,17,30,.76); backdrop-filter: blur(24px) saturate(160%); }
 .waiting-admit  { background: rgba(13,17,30,.80); backdrop-filter: blur(20px) saturate(150%); }
 .reaction-bar   { background: rgba(20,20,20,.78); backdrop-filter: blur(20px) saturate(150%); }
@@ -3136,11 +3161,12 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 .tile-name { background: rgba(0,0,0,.62); }
 .screen-share-label { background: rgba(0,0,0,.72); color: #fff; }
 
-/* Контур поля ввода почти совпадал с фоном: поле было неотличимо от страницы,
-   пока в него не ткнёшь. Границе интерактивных элементов нужен свой цвет,
-   тонкие разделители внутри карточек остаются прежними. */
-.field-group input, .field-group textarea, .field-group select,
-.text-input, .contact-search, .chat-input {
+/* Поле ввода в переписке отличается от подложки контуром: там под ним не
+   карточка, а размытое видео, и заливка на таком фоне не читается.
+   Остальные поля различаются заливкой — см. «Поля ввода» ниже; когда-то
+   контур стоял и у них, но то правило перебивалось этим следующим, и рамки
+   не было ни у кого. */
+.chat-input {
   border: 1px solid var(--edge-interactive, #5a6272);
 }
 
