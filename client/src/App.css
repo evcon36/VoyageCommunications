@@ -226,8 +226,26 @@ h1, h2, h3 { line-height: 1.18; letter-spacing: -0.01em; }
 }
 .participants-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-weight: 600; }
 .participants-list { display: flex; flex-direction: column; gap: 8px; }
-.participant-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-radius: 12px; background: var(--surface-2); border: none; }
-.participant-name { color: var(--text); font-weight: 500; }
+.participant-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: none;
+}
+/* Имя и метка — первой строкой, во всю ширину */
+.participant-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+/* Длинный ник не должен распирать строку и выдавливать метку за край */
+.participant-name {
+  color: var(--text);
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .participant-badge { font-size: 12px; padding: 5px 10px; border-radius: 999px; background: var(--accent-bg, color-mix(in srgb, var(--accent) 14%, transparent)); color: var(--accent-text); }
 .participants-empty { color: var(--text-dim); padding: 4px 2px; font-size: 14px; }
 
@@ -1931,7 +1949,13 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 .emp-team-tags { display: flex; gap: 6px; flex-shrink: 0; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 
 /* ── Participant kick ── */
-.participant-actions-row { display: flex; align-items: center; gap: 8px; }
+/* Действия — второй строкой. Их бывает до трёх, и в узкий экран (самый
+   маленький из живых айфонов — 375 точек) в один ряд с именем они не влезали
+   никогда: наезжали на имя и уходили за правый край. Переносятся и делят
+   ширину поровну, поэтому одинаково выглядят и на 375, и на 440. */
+.participant-actions-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.participant-actions-row:empty { display: none; }
+.participant-actions-row .kick-btn { flex: 1 1 auto; min-width: 0; }
 .kick-btn {
   border: 1px solid rgba(239,68,68,0.35);
   background: rgba(239,68,68,0.12);
@@ -2681,7 +2705,23 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   flex: 0 0 auto;
   transition: height .28s cubic-bezier(.32,.72,0,1);
 }
+/* ── Собеседник один ──
+   Плитка принимает пропорцию потока, и в портретный экран вертикальное видео
+   входит по ширине — остаток по высоте центрирование делило пополам, и сверху
+   и снизу выходило по чёрной полосе. Обрезать нельзя (правило владельца:
+   видео показывается целиком), поэтому просто не делим: прижимаем к низу,
+   и весь остаток собирается в одну полосу сверху. Там же лежит верхняя
+   панель с названием комнаты и связью — теперь она на полосе, а не на лице.
+   Сетка из нескольких человек по-прежнему центрируется. */
+.tile-rows--solo {
+  justify-content: flex-end;
+  padding-bottom: 0;
+}
+
 .tile-rows .participant-tile { border-radius: 14px; }
+/* Видео доходит до самого низа, поэтому нижние углы у него не скруглены:
+   скругление на краю экрана читается как недоделанная вёрстка. */
+.tile-rows--solo .participant-tile { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 /* Видео показывается целиком: обрезки нет нигде. Плитке заранее задана
    пропорция потока, так что полос обычно не видно, но пока пропорция ещё
    не измерена, contain покажет поля, а cover срезал бы человеку пол-лица. */

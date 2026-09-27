@@ -4337,7 +4337,13 @@ export default function App() {
               const isGuest = String(p.identity || '').startsWith('guest#');
               return (
                 <div className="participant-item" key={p.identity}>
-                  <span className="participant-name">{displayName(p)}</span>
+                  {/* Имя и метка — своей строкой. Раньше имя, три кнопки и
+                      метка стояли в один ряд: на телефоне это под четыреста
+                      точек, кнопки наезжали на имя и уходили за край. */}
+                  <div className="participant-head">
+                    <span className="participant-name">{displayName(p)}</span>
+                    <span className="participant-badge">{isLocal ? 'Вы' : 'В комнате'}</span>
+                  </div>
                   <span className="participant-actions-row">
                     {!isLocal && (
                       <button className="kick-btn" title="Пожаловаться на участника"
@@ -4354,7 +4360,6 @@ export default function App() {
                     {iAmHost && !isLocal && (
                       <button className="kick-btn" title="Удалить из звонка" onClick={() => kickParticipant(p.identity)}>Удалить</button>
                     )}
-                    <span className="participant-badge">{isLocal ? 'Вы' : 'В комнате'}</span>
                   </span>
                 </div>
               );
@@ -5896,8 +5901,11 @@ export default function App() {
               </div>
             ) : (
               /* Рядная раскладка без обрезки: плитка принимает пропорцию
-                 потока, ряд заполняет ширину, неполный ряд центрируется. */
-              <div className="tile-rows">
+                 потока, ряд заполняет ширину, неполный ряд центрируется.
+                 --solo: собеседник один. Тогда остаток по высоте не делим
+                 пополам, а собираем в одну полосу сверху — видео доходит до
+                 самого низа экрана, а полоса достаётся верхней панели. */
+              <div className={`tile-rows${visible.length === 1 ? ' tile-rows--solo' : ''}`}>
                 {/* Один в звонке. Раньше это был просто чёрный экран, и
                     человек не понимал, ждать ему или всё сломалось. */}
                 {visible.length === 0 && (
