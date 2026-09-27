@@ -187,7 +187,16 @@ final class VoipCallManager: NSObject {
         if let until = pauseUntil, until > Date() { return }
         let events = UserDefaults.standard.array(forKey: logKey) as? [[String: String]] ?? []
         guard !events.isEmpty else { return }
-        guard let body = try? JSONSerialization.data(withJSONObject: ["token": token, "events": events])
+        // Метка пачки. Отправка идёт с повторами, а запись в дневник —
+        // действие с последствием: если сервер пачку принял, но ответ не
+        // успел вернуться за срок попытки, повтор приносил те же записи
+        // ещё раз. В журнале появлялись одинаковые строки с одинаковыми
+        // отметками времени, и разбор уводило по ложному следу — будто
+        // приложение входило в комнату трижды. По этой метке сервер
+        // отличает повтор от новой пачки.
+        let batch = UUID().uuidString
+        guard let body = try? JSONSerialization.data(
+            withJSONObject: ["token": token, "batch": batch, "events": events])
         else { return }
         flushing = true
         flushStartedAt = Date()

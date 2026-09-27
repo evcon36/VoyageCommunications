@@ -211,9 +211,30 @@ async function registerVoipToken(req, res) {
 // Авторизации здесь нет намеренно: приложение, разбуженное пушем, токена
 // входа ещё не знает. Вместо него представляемся тем же VoIP-токеном, по
 // которому Apple доставила пуш — по нему же находим, чей это телефон.
+// Пачки, уже записанные в журнал. Телефон шлёт дневник с повторами, и
+// принятая, но не подтверждённая вовремя пачка приходила снова: в журнале
+// двоились строки с одинаковыми отметками времени. Помним последние метки и
+// молча подтверждаем повтор, ничего не записывая. Память ограничена: это
+// диагностика, а не учёт, и переживать перезапуск ей незачем.
+const seenLogBatches = new Set();
+function alreadyLogged(batch) {
+  if (!batch) return false;
+  if (seenLogBatches.has(batch)) return true;
+  seenLogBatches.add(batch);
+  if (seenLogBatches.size > 500) {
+    // Set хранит порядок вставки — выкидываем самые старые
+    for (const old of seenLogBatches) {
+      seenLogBatches.delete(old);
+      if (seenLogBatches.size <= 400) break;
+    }
+  }
+  return false;
+}
+
 async function voipLog(req, res) {
   try {
-    const { token, events } = req.body || {};
+    const { token, batch, events } = req.body || {};
+    if (alreadyLogged(batch)) return res.status(200).json({ ok: true, duplicate: true });
     const list = Array.isArray(events) ? events.slice(0, 40) : [];
     if (!list.length) return res.status(200).json({ ok: true });
     let who = 'неизвестный';
