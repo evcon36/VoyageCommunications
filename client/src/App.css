@@ -2312,7 +2312,9 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 
 /* ── Экран звонка и его панели ВСЕГДА тёмные (видео/чат лучше на чёрном),
       независимо от выбранной темы приложения. Переопределяем токены локально. ── */
-.call-fullscreen, .chat-overlay, .sounds-panel-backdrop, .sounds-panel,
+.call-fullscreen,
+.chat-overlay:not(.chat-overlay--page),
+.sounds-panel-backdrop, .sounds-panel,
 .dialing-shell, .admin-overlay {
   /* Переназначить токены мало: color наследуется вычисленным значением, а не
      пересчитывается. Потомки, у которых нет своего color, донаследовали тёмный
@@ -3119,10 +3121,20 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
    пятна кнопок. Эти панели обязаны быть тёмными независимо от темы
    (см. «Экран звонка и его панели ВСЕГДА тёмные»), поэтому в светлой теме
    они становятся плотными: стекло здесь нечему отражать. */
-:root[data-theme="light"] .chat-overlay,
+:root[data-theme="light"] .chat-overlay:not(.chat-overlay--page),
 :root[data-theme="light"] .sounds-panel {
   background: #0d111e;
   backdrop-filter: none;
+}
+
+/* Панель контактов — обычное окно приложения, а не часть звонка: в светлой
+   теме она светлая. Матовое стекло здесь ни к чему: под ней не кадр, а
+   начальный экран, отражать нечего. */
+:root[data-theme="light"] .chat-overlay--page {
+  background: var(--surface-1);
+  backdrop-filter: none;
+  border-left: 1px solid var(--edge);
+  box-shadow: -8px 0 40px rgba(16,24,40,.12);
 }
 /* Экран дозвона тоже полупрозрачный и тоже обязан быть тёмным. */
 :root[data-theme="light"] .dialing-shell { background: #08090b; }

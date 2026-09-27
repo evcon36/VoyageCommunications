@@ -4191,7 +4191,10 @@ export default function App() {
 
       {/* ── Контакты (по кнопке) ── */}
       {isContactsOpen && (
-        <aside className="chat-overlay">
+        // --page: панель открывается с начального экрана, а не поверх видео,
+        // поэтому она следует теме. Участники, чат и настройки живут только
+        // внутри звонка, над кадром, и остаются тёмными в любой теме.
+        <aside className="chat-overlay chat-overlay--page">
           <div className="chat-header">
             <div className="chat-title"><Icon name="users" size={17} /> Контакты ({contacts.length})</div>
             <button className="ghost-btn" style={{ height: 36, padding: '0 12px' }} onClick={() => setIsContactsOpen(false)}><Icon name="close" size={16} /></button>
