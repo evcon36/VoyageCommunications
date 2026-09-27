@@ -329,6 +329,22 @@ const DEFAULT_ASPECT = 9 / 16;
 const SELF_LONG = 156;
 const SELF_ZOOM = 3;         // во сколько раз увеличивается по тапу
 const PIP_MARGIN = 12;
+
+// Вырезы, скруглённые углы и полоса жестов — числами. Сцена занимает весь
+// экран, поэтому отступ от её края это отступ от края телефона: без этой
+// поправки плавающее окно своей камеры липло к самому углу устройства,
+// залезая под скругление и под полосу жестов.
+const readPx = (name) => {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name);
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : 0;
+};
+const safeAreaInsets = () => ({
+  top: readPx('--sa-top'),
+  right: readPx('--sa-right'),
+  bottom: readPx('--sa-bottom'),
+  left: readPx('--sa-left'),
+});
 const SELF_MODE_KEY = 'coms-self-mode';
 
 // ── Ошибки подключения к LiveKit ──
@@ -2015,6 +2031,22 @@ export default function App() {
   // Позвонить контакту: создаём приватную комнату, зовём его и заходим сами
   const callContact = async (username) => {
     if (call) return;                                    // уже звоним — второй клик игнорируем
+    // Уже в разговоре — значит, это приглашение третьего, а не новый звонок.
+    // Новую комнату не заводим: зовём в ту, где сидим. Пропуском служит ключ
+    // приглашения, он и так уезжает в call-start, и по нему сервер выдаёт
+    // токен, не требуя членства в комнате — поэтому позвать может не только
+    // хозяин комнаты, но и тот, кого позвали.
+    if (joined && roomIdRef.current) {
+      socket.emit('call-start', {
+        toUsername: username,
+        roomSlug: roomIdRef.current,
+        inviteKey: inviteKeyRef.current,
+        fromName: userName.trim() || authUser?.username,
+      });
+      setCallNotice(`Звоним ${username}…`);
+      setIsContactsOpen(false);
+      return;
+    }
     try {
       const token = localStorage.getItem('token');
       const resp = await apiFetch(`/rooms/call`, {
@@ -3438,10 +3470,36 @@ export default function App() {
   // Размер окна зависит от пропорции камеры и меняется на лету, поэтому
   // перетаскивание берёт его из ref, а не из замыкания рендера.
   const selfSizeRef = useRef({ w: 88, h: SELF_LONG });
-  const selfCorner = (r, size) => ({
-    x: Math.max(PIP_MARGIN, r.width - size.w - PIP_MARGIN),
-    y: Math.max(PIP_MARGIN, r.height - size.h - 150),
-  });
+  // Поле, в котором живёт плавающее окно своей камеры. Считается от края
+  // видимой области звонка, а не от края телефона: сверху вырез, снизу
+  // полоса жестов, по бокам скруглённые углы. Снизу вдобавок панель кнопок —
+  // пока она показана, окно не должно под неё заезжать.
+  const selfBoundsRef = useRef(null);
+  const selfBounds = (r, size) => {
+    const sa = safeAreaInsets();
+    // Панель висит в 12 точках от низа сцены; поверх её высоты добавляем
+    // тот же отступ, чтобы окно не касалось её вплотную.
+    const controls = controlsVisibleRef.current && controlsH ? controlsH + 12 + PIP_MARGIN : 0;
+    const minX = PIP_MARGIN + sa.left;
+    const minY = PIP_MARGIN + sa.top;
+    const maxX = Math.max(minX, r.width - size.w - PIP_MARGIN - sa.right);
+    const maxY = Math.max(minY, r.height - size.h - PIP_MARGIN - sa.bottom - controls);
+    const b = { minX, minY, maxX, maxY };
+    selfBoundsRef.current = b;
+    return b;
+  };
+  const clampSelf = (pos, r, size) => {
+    const b = selfBounds(r, size);
+    return {
+      x: Math.min(Math.max(b.minX, pos.x), b.maxX),
+      y: Math.min(Math.max(b.minY, pos.y), b.maxY),
+    };
+  };
+  // Угол по умолчанию — правый нижний угол окна звонка, а не телефона.
+  const selfCorner = (r, size) => {
+    const b = selfBounds(r, size);
+    return { x: b.maxX, y: b.maxY };
+  };
   // Перетаскивание своего окна. Тап отличаем от перетаскивания по смещению:
   // сдвинули меньше пяти пикселей — считаем тапом и увеличиваем окно.
   const selfDragIdRef = useRef(null);
@@ -3459,8 +3517,10 @@ export default function App() {
     const base = selfPos || selfCorner(r, size);
     const start = { x: e.clientX, y: e.clientY, ox: base.x, oy: base.y, moved: false };
     setSelfDragging(true);
-    const clampX = v => Math.min(Math.max(PIP_MARGIN, v), Math.max(PIP_MARGIN, r.width - size.w - PIP_MARGIN));
-    const clampY = v => Math.min(Math.max(PIP_MARGIN, v), Math.max(PIP_MARGIN, r.height - size.h - PIP_MARGIN));
+    // Те же границы, что и у угла по умолчанию: тащить окно под панель
+    // кнопок или под полосу жестов нельзя.
+    const clampX = v => clampSelf({ x: v, y: 0 }, r, size).x;
+    const clampY = v => clampSelf({ x: 0, y: v }, r, size).y;
     const move = (ev) => {
       if (ev.pointerId !== selfDragIdRef.current) return;
       const dx = ev.clientX - start.x, dy = ev.clientY - start.y;
@@ -3732,18 +3792,28 @@ export default function App() {
         x: Math.round(((stageSize.w || 360) - selfBigSize.w) / 2),
         y: Math.max(PIP_MARGIN, Math.round(((stageSize.h || 640) - selfBigSize.h) / 2 - 24)),
       }
-    : {
-        ...selfSize,
-        ...(selfPos || selfCorner({ width: stageSize.w || 360, height: stageSize.h || 640 }, selfSize)),
-      };
+    : (() => {
+        // Показанная панель кнопок сдвигает нижнюю границу вверх, и окно
+        // уезжает над ней; когда панель прячется, граница опускается и окно
+        // возвращается на выбранное место. Само выбранное место (selfPos) не
+        // трогаем — иначе после пары показов панели окно уползало бы вверх.
+        const r = { width: stageSize.w || 360, height: stageSize.h || 640 };
+        const pos = selfPos ? clampSelf(selfPos, r, selfSize) : selfCorner(r, selfSize);
+        return { ...selfSize, ...pos };
+      })();
 
   // При повороте экрана сцена меняет размеры, и старые координаты уводили
   // окно за границу — оно просто пропадало из виду. Возвращаем его внутрь.
   useEffect(() => {
     if (!selfPos || !stageSize.w || !stageSize.h) return;
-    const { w, h } = selfSizeRef.current;
-    const x = Math.min(Math.max(PIP_MARGIN, selfPos.x), Math.max(PIP_MARGIN, stageSize.w - w - PIP_MARGIN));
-    const y = Math.min(Math.max(PIP_MARGIN, selfPos.y), Math.max(PIP_MARGIN, stageSize.h - h - PIP_MARGIN));
+    const size = selfSizeRef.current;
+    // Границы после поворота считаем без учёта панели кнопок: она показана не
+    // всегда, а выбранное место должно пережить поворот целиком. Под панель
+    // окно всё равно не заедет — отрисовка прижмёт его к границе сама.
+    const wasVisible = controlsVisibleRef.current;
+    controlsVisibleRef.current = false;
+    const { x, y } = clampSelf(selfPos, { width: stageSize.w, height: stageSize.h }, size);
+    controlsVisibleRef.current = wasVisible;
     if (x !== selfPos.x || y !== selfPos.y) setSelfPos({ x, y });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageSize.w, stageSize.h, selfSize.w, selfSize.h]);
@@ -4191,10 +4261,10 @@ export default function App() {
 
       {/* ── Контакты (по кнопке) ── */}
       {isContactsOpen && (
-        // --page: панель открывается с начального экрана, а не поверх видео,
-        // поэтому она следует теме. Участники, чат и настройки живут только
-        // внутри звонка, над кадром, и остаются тёмными в любой теме.
-        <aside className="chat-overlay chat-overlay--page">
+        // --page: вне звонка панель открывается с начального экрана, где под
+        // ней нет видео, и следует теме. В звонке та же панель лежит поверх
+        // кадра — там она тёмная, как участники, чат и настройки.
+        <aside className={`chat-overlay${joined ? '' : ' chat-overlay--page'}`}>
           <div className="chat-header">
             <div className="chat-title"><Icon name="users" size={17} /> Контакты ({contacts.length})</div>
             <button className="ghost-btn" style={{ height: 36, padding: '0 12px' }} onClick={() => setIsContactsOpen(false)}><Icon name="close" size={16} /></button>
@@ -4245,7 +4315,18 @@ export default function App() {
         <aside className="chat-overlay">
           <div className="chat-header">
             <div className="chat-title"><Icon name="users" size={17} /> Участники ({allParticipants.length})</div>
-            <button className="ghost-btn" style={{ height: 36, padding: '0 12px' }} onClick={() => setIsParticipantsOpen(false)}><Icon name="close" size={16} /></button>
+            <span style={{ display: 'flex', gap: 8 }}>
+              {/* Позвать третьего прямо из разговора: контакты те же, но
+                  «Позвонить» теперь зовёт в эту комнату, а не заводит новую. */}
+              {authUser && (
+                <button className="ghost-btn" style={{ height: 36, padding: '0 12px' }}
+                        title="Позвать из контактов"
+                        onClick={() => { setIsParticipantsOpen(false); setIsContactsOpen(true); }}>
+                  <Icon name="phone" size={15} /> Позвать
+                </button>
+              )}
+              <button className="ghost-btn" style={{ height: 36, padding: '0 12px' }} onClick={() => setIsParticipantsOpen(false)}><Icon name="close" size={16} /></button>
+            </span>
           </div>
           <div className="chat-body">
             {allParticipants.map(p => {

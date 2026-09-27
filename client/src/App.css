@@ -8,6 +8,13 @@
   --accent-grad: linear-gradient(180deg, #fbd35f 0%, #f7c948 100%);
   --danger: #ef4444;
 
+  /* Безопасная область как числа: разметка плавающего окна своей камеры
+     считается в JS, а env() оттуда не прочитать. */
+  --sa-top: env(safe-area-inset-top, 0px);
+  --sa-right: env(safe-area-inset-right, 0px);
+  --sa-bottom: env(safe-area-inset-bottom, 0px);
+  --sa-left: env(safe-area-inset-left, 0px);
+
   /* Шкала радиусов */
   --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-xl: 20px; --r-full: 999px;
   /* Шкала отступов (сетка 4px) */
@@ -3329,24 +3336,15 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 .call-timer { opacity: .8; }
 .rec-badge, .guest-left--soon { opacity: 1; }
 
-/* ── Размер по частоте нажатия ──
-   Десять круглых кнопок были одного размера, хотя микрофон и камеру жмут
-   в разы чаще остального. Размер должен отражать, что нужнее. */
+/* ── Кнопки панели одного размера ──
+   Микрофон с камерой были 56, остальные 48, сброс снова 56 — панель выглядела
+   собранной из разных наборов. Решение владельца: один размер на все. Что
+   важнее, по-прежнему видно по цвету: выключенное красное, включённое
+   золотое, сброс красный — этого достаточно, менять ради того же ещё и
+   размер незачем. */
 @media (pointer: coarse) {
-  .controls-grid .ctrl-round:nth-child(1),
-  .controls-grid .ctrl-round:nth-child(2) {
-    width: 56px;
-    height: 56px;
-  }
-  .controls-grid .ctrl-round:nth-child(1) svg,
-  .controls-grid .ctrl-round:nth-child(2) svg { transform: scale(1.15); }
-  /* сетка подстраивается под увеличенные первые две */
-  .controls-grid { grid-template-columns: 56px 56px 48px 48px; align-items: center; }
+  .controls-grid { align-items: center; }
 }
-
-/* Кнопка завершения остаётся самой заметной: это единственное действие,
-   которое нельзя отменить */
-.ctrl-round--danger { width: 56px; height: 56px; }
 
 /* ── Пустой раздел ──
    Был серым абзацем, и раздел читался как незаполненный каркас: человек не

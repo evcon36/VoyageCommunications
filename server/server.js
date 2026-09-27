@@ -187,6 +187,11 @@ function removeUserFromRoom(roomId, socketId) {
   if (users.length > 0) roomUsers.set(roomId, users);
   else {
     roomUsers.delete(roomId);
+    // Комната опустела — снимаем запись, если её забыли выключить. Раньше
+    // человек сбрасывал звонок, не нажав «остановить запись», и egress
+    // продолжал писать пустую комнату до empty_timeout: в файл уходило пять
+    // минут тишины, а в списке записей звонок выглядел незакрытым.
+    recordingsRoutes.stopRecordingOnEmptyRoom(roomId);
     // Комната опустела: авторство сообщений больше не нужно, иначе карта
     // растёт весь срок жизни процесса
     chatAuthors.delete(roomId);
@@ -370,7 +375,13 @@ io.on('connection', (socket) => {
     // Звонящий тоже может быть занят: сидеть в другой комнате или уже кому-то
     // дозваниваться. Раньше проверялась только сторона получателя, и человек
     // из активного разговора мог начать второй звонок и попасть в две комнаты.
-    if (isBusy(from)) return endToCaller(socket, 'busy-self');
+    // Звать третьего в разговор, где уже сидишь, — не «занят», а приглашение.
+    // Раньше любой звонок из комнаты обрывался как busy-self, и добавить
+    // человека в идущий разговор было нельзя вовсе.
+    const invitingIntoOwnRoom = Boolean(roomSlug) && socket.data.roomId === roomSlug;
+    if (!invitingIntoOwnRoom && isBusy(from)) return endToCaller(socket, 'busy-self');
+    // А вот занятость того, кого зовём, проверяется по-прежнему: человек в
+    // другом разговоре не должен получать вторую плашку.
     if (isBusy(to)) return endToCaller(socket, 'busy');
 
     const callId = `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;

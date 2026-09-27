@@ -150,6 +150,34 @@ router.post('/start', authMiddleware, async (req, res) => {
   }
 });
 
+// Остановка записи как отдельное действие: её зовёт не только кнопка, но и
+// сервер, когда комната опустела. Без этого запись, которую забыли выключить
+// перед тем как сбросить звонок, продолжалась ещё и в пустой комнате — до
+// empty_timeout, то есть пять минут тишины в файле.
+async function stopActiveRecording(roomId) {
+  const rec = await prisma.recording.findFirst({ where: { roomId, status: 'active' } });
+  if (!rec) return null;
+  await egress.stopEgress(rec.egressId);
+  const speakerLog = recTimeline.endRec(rec.id);
+  return prisma.recording.update({
+    where: { id: rec.id },
+    data: { status: 'done', endedAt: new Date(), speakerLog },
+  });
+}
+
+// Комната опустела — снимаем запись, если её забыли выключить. Ошибку сюда
+// не пробрасываем: это уборка за ушедшими, падать из-за неё некому.
+async function stopRecordingOnEmptyRoom(roomId) {
+  try {
+    const stopped = await stopActiveRecording(roomId);
+    if (!stopped) return;
+    console.log(`REC AUTO-STOP: комната ${roomId} опустела, запись остановлена`);
+    global.io?.to(roomId).emit('recording-state', { active: false, by: null });
+  } catch (e) {
+    console.error('REC AUTO-STOP ERROR:', e.message);
+  }
+}
+
 // ── Остановить запись ──
 router.post('/stop', authMiddleware, async (req, res) => {
   const { roomId } = req.body || {};
@@ -157,12 +185,7 @@ router.post('/stop', authMiddleware, async (req, res) => {
   if (!rec) return res.status(404).json({ message: 'Активной записи нет' });
 
   try {
-    await egress.stopEgress(rec.egressId);
-    const speakerLog = recTimeline.endRec(rec.id);
-    const updated = await prisma.recording.update({
-      where: { id: rec.id },
-      data: { status: 'done', endedAt: new Date(), speakerLog },
-    });
+    const updated = await stopActiveRecording(roomId);
     return res.json({ recording: updated });
   } catch (e) {
     console.error('REC STOP ERROR:', e.message);
@@ -446,3 +469,4 @@ router.post('/:id/summary', authMiddleware, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.stopRecordingOnEmptyRoom = stopRecordingOnEmptyRoom;
