@@ -3,6 +3,15 @@ const crypto = require('crypto');
 const { AccessToken, RoomServiceClient } = require('livekit-server-sdk');
 const authMiddleware = require('../middleware/auth.middleware');
 const prisma = require('../lib/prisma');
+const ukey = require('../lib/username');
+
+// Членство в комнате — то же сравнение имён, что и везде: без оглядки на
+// регистр. Иначе приглашённый «vmozark» не может войти в комнату, куда его
+// записали как VMOZARK, и наоборот.
+function isMemberOf(room, username) {
+  const k = ukey(username);
+  return (room.members || []).some((m) => ukey(m) === k);
+}
 const { callBlocked } = require('./moderation.routes');
 
 const router = express.Router();
@@ -240,7 +249,7 @@ router.get('/info/:slug', authMiddleware, async (req, res) => {
     const room = await prisma.room.findUnique({ where: { slug: req.params.slug } });
     if (!room) return res.json({ exists: false });
     const isOwner = room.ownerId === req.user.id;
-    const isMember = room.members.includes(req.user.username);
+    const isMember = isMemberOf(room, req.user.username);
     return res.json({
       exists: true,
       name: room.name,
@@ -268,7 +277,7 @@ router.post('/invite', authMiddleware, async (req, res) => {
     if (!room) return res.status(404).json({ message: 'Комната не найдена' });
     if (room.ownerId !== req.user.id) return res.status(403).json({ message: 'Приглашать может только владелец' });
     const uname = String(username).trim();
-    if (room.members.includes(uname)) return res.json({ room, message: 'Уже приглашён' });
+    if (isMemberOf(room, uname)) return res.json({ room, message: 'Уже приглашён' });
     const updated = await prisma.room.update({ where: { slug }, data: { members: { push: uname } } });
     return res.json({ room: updated, message: `${uname} приглашён` });
   } catch (e) {
@@ -286,7 +295,7 @@ router.post('/token', authMiddleware, async (req, res) => {
     const room = await prisma.room.findUnique({ where: { slug: roomId } });
     if (room && room.isPrivate) {
       const isOwner = room.ownerId === req.user.id;
-      const isMember = room.members.includes(req.user.username);
+      const isMember = isMemberOf(room, req.user.username);
       const keyValid = key && room.inviteKey && key === room.inviteKey;
       if (!isOwner && !isMember && !keyValid) {
         return res.status(403).json({ message: 'Приватная комната: вход по ссылке-приглашению', needKnock: true });

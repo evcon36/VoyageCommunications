@@ -14,6 +14,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const authMiddleware = require('../middleware/auth.middleware');
 const prisma = require('../lib/prisma');
+const ukey = require('../lib/username');
 
 const router = express.Router();
 
@@ -148,7 +149,8 @@ async function callBlocked(a, b) {
   try {
     const rows = await prisma.$queryRaw`
       SELECT 1 FROM "UserBlock"
-      WHERE (owner = ${a} AND blocked = ${b}) OR (owner = ${b} AND blocked = ${a}) LIMIT 1`;
+      WHERE (lower(owner) = ${ukey(a)} AND lower(blocked) = ${ukey(b)})
+         OR (lower(owner) = ${ukey(b)} AND lower(blocked) = ${ukey(a)}) LIMIT 1`;
     return rows.length > 0;
   } catch {
     return false;   // сбой базы не должен запрещать звонки всем подряд

@@ -12,6 +12,7 @@ const contactsRoutes = require('./src/routes/contacts.routes');
 const internalRoutes = require('./src/routes/internal.routes');
 const prisma = require('./src/lib/prisma');
 const recTimeline = require('./src/lib/recTimeline');
+const ukey = require('./src/lib/username');
 const { verifyToken } = require('./src/lib/jwt');
 const jwt = require('jsonwebtoken');
 const moderationRoutes = require('./src/routes/moderation.routes');
@@ -92,17 +93,20 @@ global.admittedWaiters = admittedWaiters;
 // импортировать сервер оттуда нельзя, получится круг
 global.io = io;
 
-// Кто сейчас на сайте: username -> Set<socketId> (для входящих звонков)
+// Кто сейчас на сайте: ukey(username) -> Set<socketId> (для входящих звонков).
+// Ключ приведён к нижнему регистру: см. src/lib/username.js — иначе звонок на
+// контакт, записанный в другом регистре, обрывается как «не в сети».
 const onlineUsers = new Map();
 function addPresence(username, socketId) {
-  if (!onlineUsers.has(username)) onlineUsers.set(username, new Set());
-  onlineUsers.get(username).add(socketId);
+  const k = ukey(username);
+  if (!onlineUsers.has(k)) onlineUsers.set(k, new Set());
+  onlineUsers.get(k).add(socketId);
 }
 function removePresence(username, socketId) {
-  const set = onlineUsers.get(username);
+  const set = onlineUsers.get(ukey(username));
   if (!set) return;
   set.delete(socketId);
-  if (set.size === 0) onlineUsers.delete(username);
+  if (set.size === 0) onlineUsers.delete(ukey(username));
 }
 
 // ── Состояние звонков ──
@@ -111,7 +115,7 @@ const activeCalls = new Map();
 const CALL_TIMEOUT_MS = 45000;
 
 function emitTo(username, event, payload) {
-  for (const sid of onlineUsers.get(username) || []) io.to(sid).emit(event, payload);
+  for (const sid of onlineUsers.get(ukey(username)) || []) io.to(sid).emit(event, payload);
 }
 
 // Занят, если уже в комнате или в процессе другого звонка.
@@ -127,7 +131,7 @@ function emitTo(username, event, payload) {
 // телефон вообще. Поэтому отметка стареет.
 const FOREGROUND_TTL_MS = 45000;
 function isForeground(username) {
-  for (const sid of onlineUsers.get(username) || []) {
+  for (const sid of onlineUsers.get(ukey(username)) || []) {
     const d = io.sockets.sockets.get(sid)?.data;
     if (d?.foreground && Date.now() - (d.foregroundAt || 0) < FOREGROUND_TTL_MS) return true;
   }
@@ -135,10 +139,11 @@ function isForeground(username) {
 }
 
 function isBusy(username) {
-  for (const sid of onlineUsers.get(username) || []) {
+  for (const sid of onlineUsers.get(ukey(username)) || []) {
     if (io.sockets.sockets.get(sid)?.data?.roomId) return true;
   }
-  for (const c of activeCalls.values()) if (c.from === username || c.to === username) return true;
+  const k = ukey(username);
+  for (const c of activeCalls.values()) if (ukey(c.from) === k || ukey(c.to) === k) return true;
   return false;
 }
 
@@ -322,7 +327,7 @@ io.on('connection', (socket) => {
     // звонок мог всё это время стоять и звонить без единого живого сокета
     // на стороне получателя. Досылаем call-incoming именно этому сокету.
     for (const call of activeCalls.values()) {
-      if (call.to === name && call.state === 'ringing') {
+      if (ukey(call.to) === ukey(name) && call.state === 'ringing') {
         socket.emit('call-incoming', {
           callId: call.callId, from: call.from, fromName: call.fromName,
           roomSlug: call.roomSlug, inviteKey: call.inviteKey,
@@ -347,19 +352,19 @@ io.on('connection', (socket) => {
     const from = socket.data.presenceUsername;
     const to = String(toUsername || '');
     if (!from || !to) return;
-    if (from === to) return endToCaller(socket, 'self');
+    if (ukey(from) === ukey(to)) return endToCaller(socket, 'self');
 
     // Чёрный список работает в обе стороны: иначе заблокированный просто
     // звонит сам и запрет ничего не значит. Причину не раскрываем: человеку
     // незачем знать, заблокировали его или просто нет в сети.
     if (await moderationRoutes.callBlocked(from, to)) return endToCaller(socket, 'unavailable');
 
-    const targets = onlineUsers.get(to);
+    const targets = onlineUsers.get(ukey(to));
     // Раньше отсутствие сокета сразу означало отказ. Теперь получатель может
     // быть офлайн просто потому, что приложение закрыто на iPhone — в этом
     // случае будим его VoIP-пушем (CallKit), а не отказываем сразу.
     const hasVoipToken = await prisma.$queryRaw`
-      SELECT 1 FROM "VoipPushToken" WHERE username = ${to} AND platform = 'ios' LIMIT 1
+      SELECT 1 FROM "VoipPushToken" WHERE lower(username) = ${ukey(to)} AND platform = 'ios' LIMIT 1
     `.then((r) => r.length > 0).catch(() => false);
     if ((!targets || targets.size === 0) && !hasVoipToken) return endToCaller(socket, 'unavailable');
     // Звонящий тоже может быть занят: сидеть в другой комнате или уже кому-то
@@ -399,7 +404,7 @@ io.on('connection', (socket) => {
     // переход из ringing разрешён ровно один раз: иначе звонок примут
     // и на телефоне, и на ноутбуке, и оба войдут в комнату
     if (!call || call.state !== 'ringing') return;
-    if (socket.data.presenceUsername !== call.to) return;
+    if (ukey(socket.data.presenceUsername) !== ukey(call.to)) return;
 
     call.state = 'active';
     clearTimeout(call.timer);
@@ -417,7 +422,7 @@ io.on('connection', (socket) => {
     // комнату, потому что серверный отказ приходил уже после входа.
     socket.emit('call-accept-ok', { callId, roomSlug: call.roomSlug, inviteKey: call.inviteKey });
     // остальным устройствам получателя: звонок уже приняли, плашку убрать
-    for (const sid of onlineUsers.get(call.to) || []) {
+    for (const sid of onlineUsers.get(ukey(call.to)) || []) {
       if (sid !== socket.id) io.to(sid).emit('call-ended', { callId, reason: 'taken' });
     }
     activeCalls.delete(callId);
@@ -425,13 +430,13 @@ io.on('connection', (socket) => {
 
   socket.on('call-decline', ({ callId }) => {
     const call = activeCalls.get(callId);
-    if (!call || socket.data.presenceUsername !== call.to) return;
+    if (!call || ukey(socket.data.presenceUsername) !== ukey(call.to)) return;
     endCall(callId, 'declined');
   });
 
   socket.on('call-cancel', ({ callId }) => {
     const call = activeCalls.get(callId);
-    if (!call || socket.data.presenceUsername !== call.from) return;
+    if (!call || ukey(socket.data.presenceUsername) !== ukey(call.from)) return;
     endCall(callId, 'cancelled');
   });
 

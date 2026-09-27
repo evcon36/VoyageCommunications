@@ -174,6 +174,33 @@ const check = (name, ok, detail = '') => {
     check('обрыв у звонящего гасит плашку', e?.reason === 'cancelled', `reason=${e?.reason}`);
   }
 
+  await settle([a, b]);
+
+  // 9. Регистр имени не должен решать, дойдёт звонок или нет.
+  //    Настоящее имя VMOZARK, в контакте лежало vmozark — presence и
+  //    VoIP-токен искались посимвольно, оба промаха давали «не в сети»,
+  //    и звонок обрывался до начала. Причём только в одну сторону.
+  {
+    const inc = waitFor(b, 'call-incoming');
+    a.emit('call-start', { toUsername: 'TESTCALLEE', ...ROOM, fromName: 'A' });
+    const call = await inc;
+    check('имя в другом регистре доходит до получателя', Boolean(call?.callId));
+    if (call?.callId) {
+      a.emit('call-cancel', { callId: call.callId });
+      await waitFor(b, 'call-ended', 2000);
+    }
+  }
+
+  await settle([a, b]);
+
+  // 10. И обратная сторона того же: себе в другом регистре звонить нельзя
+  {
+    const ended = waitFor(a, 'call-ended');
+    a.emit('call-start', { toUsername: 'TestCaller', ...ROOM, fromName: 'A' });
+    const e = await ended;
+    check('звонок себе в другом регистре отклоняется', e?.reason === 'self', `reason=${e?.reason}`);
+  }
+
   a.close(); b.close();
   const bad = results.filter(r => !r.ok);
   console.log(`\nИТОГО: ${results.length - bad.length}/${results.length} сценариев прошли`);
