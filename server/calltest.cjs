@@ -201,6 +201,29 @@ const check = (name, ok, detail = '') => {
     check('звонок себе в другом регистре отклоняется', e?.reason === 'self', `reason=${e?.reason}`);
   }
 
+  await settle([a, b]);
+
+  // 11. Аудиозвонок доходит как аудио: от типа зависят экран системы
+  //     (CallKit без значка видео) и разговорный динамик у получателя
+  {
+    const inc = waitFor(b, 'call-incoming');
+    a.emit('call-start', { toUsername: 'testcallee', ...ROOM, fromName: 'A', kind: 'audio' });
+    const call = await inc;
+    check('аудиозвонок доходит как аудио', call?.kind === 'audio', `kind=${call?.kind}`);
+    if (call?.callId) { a.emit('call-cancel', { callId: call.callId }); await waitFor(b, 'call-ended', 2000); }
+  }
+
+  await settle([a, b]);
+
+  // 12. Старый клиент тип не присылает — для него звонок, как раньше, видео
+  {
+    const inc = waitFor(b, 'call-incoming');
+    a.emit('call-start', { toUsername: 'testcallee', ...ROOM, fromName: 'A' });
+    const call = await inc;
+    check('без типа звонок считается видео', call?.kind === 'video', `kind=${call?.kind}`);
+    if (call?.callId) { a.emit('call-cancel', { callId: call.callId }); await waitFor(b, 'call-ended', 2000); }
+  }
+
   a.close(); b.close();
   const bad = results.filter(r => !r.ok);
   console.log(`\nИТОГО: ${results.length - bad.length}/${results.length} сценариев прошли`);

@@ -4,6 +4,7 @@ const { AccessToken, RoomServiceClient } = require('livekit-server-sdk');
 const authMiddleware = require('../middleware/auth.middleware');
 const prisma = require('../lib/prisma');
 const ukey = require('../lib/username');
+const friends = require('../lib/friends');
 
 // Членство в комнате — то же сравнение имён, что и везде: без оглядки на
 // регистр. Иначе приглашённый «vmozark» не может войти в комнату, куда его
@@ -209,6 +210,11 @@ router.post('/call', authMiddleware, async (req, res) => {
     // обходится ссылкой, минуя проверку в сокете
     if (await callBlocked(req.user.username, callee)) {
       return res.status(403).json({ message: 'Сейчас недоступен' });
+    }
+    // То же правило дружбы, что и в call-start: иначе комната для звонка
+    // заводилась бы кому угодно, а запрет держался бы на одном сокете.
+    if (friends.friendsRequired() && !(await friends.areFriends(req.user.username, callee))) {
+      return res.status(403).json({ message: 'Позвонить можно только другу', reason: 'not-friends' });
     }
     const room = await prisma.room.create({
       data: {

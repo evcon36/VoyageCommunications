@@ -272,6 +272,10 @@ const SOUNDS = [
   { id: 'applause', emoji: '👏', label: 'Аплодисменты', file: BASE + 'applause.mp3' },
 ];
 
+// Ник как ключ сравнения: VMOZARK и vmozark — один человек (см. сервер,
+// lib/username.js). Сравнивать ники посимвольно нельзя нигде.
+const ukeyClient = (u) => String(u || '').trim().toLowerCase();
+
 // Почему звонок закончился — человеку нужно объяснение, а не тишина
 const CALL_END_TEXT = {
   declined: 'Звонок отклонён',
@@ -282,6 +286,7 @@ const CALL_END_TEXT = {
   unavailable: 'Сейчас не в сети',
   taken: 'Вы ответили на другом устройстве',
   self: 'Нельзя позвонить самому себе',
+  'not-friends': 'Позвонить можно только другу. Отправьте заявку — когда её примут, звонок пройдёт',
 };
 
 // Гудок дозвона и звонок входящего — генерируем, чтобы не тащить mp3.
@@ -717,6 +722,89 @@ function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMute
 }
 
 // --- Main App ---
+// Комната ожидания входящего звонка. Раньше была плашка «Принять /
+// Отклонить», и человек попадал в разговор сразу с камерой и микрофоном —
+// как был. Теперь до ответа видно себя и можно решить, с чем входить.
+function IncomingLobby({ call, secondsLeft, onAccept, onDecline }) {
+  const isVideo = call.kind !== 'audio';
+  const [mic, setMic] = useState(true);
+  const [cam, setCam] = useState(isVideo);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+
+  const stopPreview = () => {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+  };
+
+  // Превью своей камеры: человек видит себя до того, как его увидят
+  useEffect(() => {
+    if (!isVideo || !cam) { stopPreview(); return undefined; }
+    let cancelled = false;
+    navigator.mediaDevices?.getUserMedia?.({ video: { facingMode: 'user' }, audio: false })
+      .then((st) => {
+        if (cancelled) { st.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = st;
+        if (videoRef.current) videoRef.current.srcObject = st;
+      })
+      // Камеры нет или доступ закрыт — входить всё равно можно, просто без неё
+      .catch(() => setCam(false));
+    return () => { cancelled = true; stopPreview(); };
+  }, [isVideo, cam]);
+
+  // Камеру отпускаем ДО входа: на iPhone вторая съёмка с той же камеры не
+  // запускается, и в звонке вместо видео была бы чёрная плитка
+  const accept = () => { stopPreview(); onAccept({ mic, cam: isVideo && cam }); };
+  const decline = () => { stopPreview(); onDecline(); };
+
+  const initial = (call.peerName || '?')[0].toUpperCase();
+  return (
+    <div className="lobby" role="dialog" aria-label="Входящий звонок">
+      <div className="lobby-card">
+        <div className="lobby-caller">
+          <div className="lobby-avatar">{initial}</div>
+          <div className="lobby-from">{call.peerName}</div>
+          <div className="lobby-kind">
+            {isVideo ? 'Видеозвонок' : 'Аудиозвонок'} · осталось {secondsLeft} с
+          </div>
+        </div>
+
+        {isVideo && (
+          <div className="lobby-preview">
+            {cam
+              ? <video ref={videoRef} className="lobby-video" autoPlay playsInline muted />
+              : <div className="lobby-preview-off"><Icon name="cameraOff" size={22} /> Камера выключена</div>}
+          </div>
+        )}
+
+        <div className="lobby-toggles">
+          <button className={`ctrl-round ${mic ? '' : 'ctrl-round--off'}`}
+                  aria-label={mic ? 'Выключить микрофон' : 'Включить микрофон'}
+                  onClick={() => setMic(m => !m)}>
+            <Icon name={mic ? 'mic' : 'micOff'} size={22} />
+          </button>
+          {isVideo && (
+            <button className={`ctrl-round ${cam ? '' : 'ctrl-round--off'}`}
+                    aria-label={cam ? 'Выключить камеру' : 'Включить камеру'}
+                    onClick={() => setCam(c => !c)}>
+              <Icon name={cam ? 'camera' : 'cameraOff'} size={22} />
+            </button>
+          )}
+        </div>
+
+        <div className="lobby-actions">
+          <button className="lobby-btn lobby-btn--decline" onClick={decline}>
+            <Icon name="phoneOff" size={18} /> Отклонить
+          </button>
+          <button className="lobby-btn lobby-btn--accept" onClick={accept}>
+            <Icon name={isVideo ? 'camera' : 'phone'} size={18} /> Войти в звонок
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [authUser, setAuthUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -842,14 +930,27 @@ export default function App() {
   // Приватные комнаты
   const [roomInfo, setRoomInfo] = useState(null); // инфо о текущем roomId, если комната зарегистрирована
 
-  // Контакты
+  // Контакты. contacts — друзья (с подтверждённой заявкой); outgoing — мои
+  // неотвеченные заявки; incoming — заявки ко мне, они же «Уведомления».
   const [contacts, setContacts] = useState([]);
+  const [outgoingReqs, setOutgoingReqs] = useState([]);
+  const [incomingReqs, setIncomingReqs] = useState([]);
+  // Какой контакт сейчас переименовывают и что уже вписали
+  const [renaming, setRenaming] = useState(null);   // { username, value }
   const [contactSearch, setContactSearch] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   // Звонок — одно состояние на обе роли. Раньше звонящий сразу оказывался
   // «в звонке», а получатель жил в отдельной переменной, и стороны расходились.
-  // { role:'out'|'in', callId, peer, peerName, roomSlug, inviteKey, phase:'ringing'|'connecting' }
+  // { role:'out'|'in', callId, peer, peerName, roomSlug, inviteKey, kind:'audio'|'video', phase:'ringing'|'connecting' }
   const [call, setCall] = useState(null);
+  // Аудио- или видеозвонок. В аудио вместо сцены с видео крупные аватары,
+  // звук идёт в разговорный динамик, экран гаснет у уха. Стоит кому-то
+  // включить камеру — звонок сам становится видео.
+  const [callMode, setCallMode] = useState('video');
+  const [speakerOn, setSpeakerOn] = useState(true);
+  // С чем входить в комнату: выбирают в комнате ожидания или кнопкой звонка,
+  // а входит в комнату обработчик сокета — через ref, не через замыкание
+  const joinMediaRef = useRef(null);   // { kind, mic, cam }
   // Обработчики сокета регистрируются один раз и не видят свежий call.
   // Им нужна актуальная копия: иначе решения принимаются по состоянию
   // первого рендера.
@@ -1916,12 +2017,24 @@ export default function App() {
       const resp = await apiFetch(`/contacts`, { headers: { Authorization: `Bearer ${token}` } });
       if (resp.ok) {
         const data = await resp.json();
-        setContacts(data.contacts || []);
+        if (Array.isArray(data.friends)) {
+          setContacts(data.friends.map(f => ({ contactUsername: f.username, alias: f.alias || null })));
+          setOutgoingReqs((data.outgoing || []).map(o => o.username));
+          setIncomingReqs((data.incoming || []).map(i => i.username));
+        } else {
+          // сервер ещё старый: заявок у него нет, есть только список
+          setContacts(data.contacts || []);
+          setOutgoingReqs([]);
+          setIncomingReqs([]);
+        }
       }
     } catch {}
   }, []);
 
   useEffect(() => { if (authUser) fetchContacts(); }, [authUser, fetchContacts]);
+  // Обработчики сокета регистрируются один раз — им нужна ссылка, а не замыкание
+  const fetchContactsRef = useRef(null);
+  fetchContactsRef.current = fetchContacts;
 
   // Кнопки «Ответить» и «Отклонить» в системном уведомлении настольного
   // приложения. Нажатие приходит сюда, поэтому звонок можно принять, не
@@ -2017,6 +2130,7 @@ export default function App() {
     } catch {}
   };
 
+  // Удалить из друзей или отменить свою заявку — для сервера одно действие
   const removeContact = async (username) => {
     try {
       const token = localStorage.getItem('token');
@@ -2025,11 +2139,50 @@ export default function App() {
         headers: { Authorization: `Bearer ${token}` },
       });
       setContacts(prev => prev.filter(c => c.contactUsername !== username));
+      setOutgoingReqs(prev => prev.filter(u => u !== username));
     } catch {}
   };
 
+  const friendAction = async (path, username) => {
+    try {
+      const token = localStorage.getItem('token');
+      await apiFetch(`/contacts/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ username }),
+      });
+    } catch {}
+    fetchContacts();
+  };
+  const acceptFriend = (username) => friendAction('accept', username);
+  const declineFriend = (username) => friendAction('decline', username);
+
+  const saveAlias = async () => {
+    const r = renaming;
+    if (!r) return;
+    setRenaming(null);
+    const alias = r.value.trim();
+    // Сразу показываем новое имя, сервер догонит
+    setContacts(prev => prev.map(c => (c.contactUsername === r.username ? { ...c, alias: alias || null } : c)));
+    try {
+      const token = localStorage.getItem('token');
+      await apiFetch(`/contacts/alias`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ username: r.username, alias }),
+      });
+    } catch {}
+    fetchContacts();
+  };
+
+  // Как показывать человека: своё имя для него, если задано, иначе ник
+  const contactLabel = (username) => {
+    const c = contacts.find(x => ukeyClient(x.contactUsername) === ukeyClient(username));
+    return c?.alias || username;
+  };
+
   // Позвонить контакту: создаём приватную комнату, зовём его и заходим сами
-  const callContact = async (username) => {
+  const callContact = async (username, kind = 'video') => {
     if (call) return;                                    // уже звоним — второй клик игнорируем
     // Уже в разговоре — значит, это приглашение третьего, а не новый звонок.
     // Новую комнату не заводим: зовём в ту, где сидим. Пропуском служит ключ
@@ -2042,6 +2195,7 @@ export default function App() {
         roomSlug: roomIdRef.current,
         inviteKey: inviteKeyRef.current,
         fromName: userName.trim() || authUser?.username,
+        kind: callMode,
       });
       setCallNotice(`Звоним ${username}…`);
       setIsContactsOpen(false);
@@ -2054,27 +2208,43 @@ export default function App() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ username }),
       });
-      if (!resp.ok) { setCallNotice('Не удалось создать звонок'); return; }
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        setCallNotice(err.reason === 'not-friends' ? CALL_END_TEXT['not-friends'] : 'Не удалось создать звонок');
+        return;
+      }
       const { room } = await resp.json();
       // Комнату создаём, но НЕ входим: пока не ответили, это дозвон, а не
       // разговор. Иначе тикал таймер и писалась тишина в пустой комнате.
       setCall({
-        role: 'out', phase: 'ringing', peer: username, peerName: username,
-        roomSlug: room.slug, inviteKey: room.inviteKey,
+        role: 'out', phase: 'ringing', peer: username, peerName: contactLabel(username),
+        roomSlug: room.slug, inviteKey: room.inviteKey, kind,
       });
+      // Звонящий входит с камерой только в видеозвонке — и то по своей
+      // настройке «Авто-включение камеры»
+      joinMediaRef.current = { kind, mic: true, cam: kind === 'video' && autoEnableCamera };
       socket.emit('call-start', {
         toUsername: username,
         roomSlug: room.slug,
         inviteKey: room.inviteKey,
         fromName: userName.trim() || authUser?.username,
+        kind,
       });
     } catch {
       setCallNotice('Не удалось создать звонок');
     }
   };
 
-  // Вошли в комнату — экран дозвона больше не нужен
-  useEffect(() => { if (joined) setCall(null); }, [joined]);
+  // Вошли в комнату — экран дозвона больше не нужен. Панели начального
+  // экрана тоже: звонок мог прийти, пока были открыты контакты или аккаунт,
+  // и после ответа разговор оказывался под ними — человек видел список
+  // контактов, а не собеседника.
+  useEffect(() => {
+    if (!joined) return;
+    setCall(null);
+    setIsContactsOpen(false);
+    setIsAccountPanelOpen(false);
+  }, [joined]);
 
   // Обратный отсчёт: человек должен видеть, что звонок не будет ждать вечно
   useEffect(() => {
@@ -2119,9 +2289,19 @@ export default function App() {
   // Кнопки передают сюда событие нажатия, а не звонок, поэтому явный звонок
   // распознаём по наличию номера: иначе объект события принимался за звонок
   // и приём молча не срабатывал.
-  const acceptCall = async (explicit) => {
+  // media — выбор из комнаты ожидания: { mic, cam }. Без него (ответ с
+  // системного экрана iPhone) входим с микрофоном и без камеры: человек уже
+  // нажал «Ответить», но видеть его сразу, прямо с экрана блокировки, он
+  // мог не собираться. Камеру включит сам, когда будет готов.
+  const acceptCall = async (explicit, media) => {
     const c = explicit?.callId ? explicit : call;
     if (!c || c.role !== 'in') return;
+    const kind = c.kind === 'audio' ? 'audio' : 'video';
+    joinMediaRef.current = {
+      kind,
+      mic: media ? media.mic !== false : true,
+      cam: kind === 'video' && Boolean(media?.cam),
+    };
     // В комнату входим не здесь, а по разрешению сервера (call-accept-ok).
     // Раньше клиент входил сразу, и при ответе с двух устройств оба
     // оказывались в комнате: отказ приходил уже после входа.
@@ -2283,6 +2463,7 @@ export default function App() {
           role: 'in', phase: 'ringing', callId: c.callId,
           peer: c.from, peerName: c.fromName || c.from,
           roomSlug: c.roomSlug, inviteKey: c.inviteKey,
+          kind: c.kind === 'audio' ? 'audio' : 'video',
         };
         setCall(incoming);
         // Звонок передаём явно: состояние ещё не успело обновиться, и без
@@ -2295,6 +2476,7 @@ export default function App() {
         role: 'in', phase: 'ringing', callId: c.callId,
         peer: c.from, peerName: c.fromName || c.from,
         roomSlug: c.roomSlug, inviteKey: c.inviteKey,
+        kind: c.kind === 'audio' ? 'audio' : 'video',
       });
       // Звонок должен доходить, даже когда приложение свёрнуто. На Windows
       // окно поднимается поверх всех и мигает в панели задач, на Android
@@ -2336,6 +2518,9 @@ export default function App() {
       // которого уже нет.
       if (callId) voipPlugin()?.endCall?.({ callId }).catch(() => {});
     });
+    // Заявку в друзья прислали, приняли или отозвали — обновляем список и
+    // счётчик уведомлений сразу, не дожидаясь, пока человек откроет контакты
+    socket.on('friends-changed', () => fetchContactsRef.current?.());
     socket.on('knock', (req) => setKnockQueue(prev =>
       prev.some(r => r.username === req.username && r.roomId === req.roomId) ? prev : [...prev, req]));
 
@@ -2380,6 +2565,7 @@ export default function App() {
       socket.off('call-accepted');
       socket.off('call-accept-ok');
       socket.off('call-ended');
+      socket.off('friends-changed');
       socket.off('knock');
     };
   }, [addAction, showFloatingReaction]);
@@ -2655,6 +2841,16 @@ export default function App() {
     // гость мог нажать «Пропустить» — тогда имя присвоит сервер («Гость N»)
     if (!guestMode && !userName.trim()) { setStatus('Введите ваше имя'); return; }
     if (joined || joiningRef.current) return;
+    // С чем входить. Выбор приходит только со звонком контакту — из комнаты
+    // ожидания или от кнопки звонка. В комнату по ссылке входят как раньше,
+    // по настройке «Авто-включение камеры». Забираем выбор сразу, до первого
+    // await: иначе его мог перезаписать следующий звонок.
+    const media = opts.direct ? joinMediaRef.current : null;
+    joinMediaRef.current = null;
+    const joinKind = media?.kind === 'audio' ? 'audio' : 'video';
+    const wantCam = media ? Boolean(media.cam) : autoEnableCamera;
+    const wantMic = media ? media.mic !== false : true;
+    setCallMode(joinKind);
     // Только после проверок: событие call-accepted приходит на все вкладки
     // аккаунта, и вкладка, уже сидящая в обычной комнате, помечала себя как
     // звонок один на один. Её потом выкидывало при уходе любого участника.
@@ -3023,10 +3219,18 @@ export default function App() {
 
       setStatus('Включаем микрофон...');
       try {
-        if (autoEnableCamera) {
+        if (wantCam) {
           await room.localParticipant.enableCameraAndMicrophone();
         } else {
           await room.localParticipant.setMicrophoneEnabled(true);
+        }
+        // Кнопка камеры должна знать правду. Раньше при выключенной
+        // «Авто-камере» она считала камеру включённой, и первое нажатие
+        // ничего не делало — включалась только со второго.
+        setIsCameraOff(!wantCam);
+        if (!wantMic) {
+          await room.localParticipant.setMicrophoneEnabled(false);
+          setIsMuted(true);
         }
         // Событие Connected приходит раньше, чем включается микрофон,
         // поэтому статус нужно вернуть сюда — иначе на экране навсегда
@@ -3046,6 +3250,8 @@ export default function App() {
         try { await room.localParticipant.setMicrophoneEnabled(false); setIsMuted(true); } catch {}
       }
       forceUpdate();
+
+      applyAudioRouteRef.current?.(joinKind);
 
       const joinPayload = { roomId: slug, userName: userName.trim(), userId: authUser?.id, roomToken: lkToken };
       socket.emit('join-room', joinPayload);
@@ -3107,6 +3313,10 @@ export default function App() {
 
   const leaveCall = async () => {
     joiningRef.current = false;
+    // Датчик приближения после звонка должен погаснуть: иначе экран тухнет
+    // всякий раз, когда телефон кладут в карман
+    if (IS_IOS_APP) voipPlugin()?.setProximity?.({ on: false }).catch(() => {});
+    setCallMode('video');
     const room = livekitRoomRef.current;
     livekitRoomRef.current = null;
     livekitRoomGlobalRef.current = null;
@@ -3160,6 +3370,21 @@ export default function App() {
     setStatus(next ? 'Микрофон выключен' : 'Микрофон включён');
     forceUpdate();
   };
+
+  // Куда идёт звук. Видео — громкий динамик, телефон перед собой. Аудио —
+  // разговорный, как обычный звонок: телефон у уха, и экран гаснет по датчику
+  // приближения, чтобы щека не нажимала кнопки. Переключатель «Динамик»
+  // выводит аудиозвонок на громкую связь — тогда датчик не нужен.
+  const applyAudioRoute = (mode, speaker) => {
+    const sp = speaker ?? (mode !== 'audio');
+    setSpeakerOn(sp);
+    if (!IS_IOS_APP) return;
+    voipPlugin()?.setAudioRoute?.({ speaker: sp }).catch(() => {});
+    voipPlugin()?.setProximity?.({ on: mode === 'audio' && !sp }).catch(() => {});
+  };
+  const applyAudioRouteRef = useRef(null);
+  applyAudioRouteRef.current = applyAudioRoute;
+  const toggleSpeaker = () => applyAudioRoute(callMode, !speakerOn);
 
   const toggleCamera = async () => {
     const room = livekitRoomRef.current;
@@ -3662,6 +3887,20 @@ export default function App() {
   const visible = gridSource.filter(hasCameraOn);
   const cameraOff = gridSource.filter(p => !hasCameraOn(p));
 
+  // Аудиозвонок остаётся аудио, пока ни у кого нет камеры. Включил камеру
+  // кто угодно, хоть собеседник, — показываем видео: смотреть на аватар,
+  // когда человека уже видно, бессмысленно.
+  const anyCameraOn = allParticipants.some(hasCameraOn);
+  const showAudioStage = joined && callMode === 'audio' && !anyCameraOn;
+  // Камера появилась — звонок становится видео, и звук уходит на громкий
+  // динамик: телефон теперь держат перед собой, а не у уха
+  useEffect(() => {
+    if (joined && callMode === 'audio' && anyCameraOn) {
+      setCallMode('video');
+      applyAudioRouteRef.current?.('video');
+    }
+  }, [joined, callMode, anyCameraOn]);
+
   // «Главный + лента» — только на телефоне и только когда людей много
   // Закрепление снимается эффектом, то есть уже после рендера. Если
   // закреплённый был единственным видимым и выключил камеру, в этом кадре
@@ -4074,15 +4313,13 @@ export default function App() {
 
       {/* ── Входящий звонок ── */}
       {call?.role === 'in' && call.phase === 'ringing' && (
-        <div className="call-popup">
-          <div className="call-popup-title"><Icon name="phone" size={18} /> Входящий звонок</div>
-          <div className="call-popup-from">{call.peerName}</div>
-          <div className="call-popup-hint">осталось {callLeft} с</div>
-          <div className="call-popup-actions">
-            <button className="primary-btn" onClick={acceptCall}>Принять</button>
-            <button className="ghost-btn" onClick={declineCall}>Отклонить</button>
-          </div>
-        </div>
+        <IncomingLobby
+          key={call.callId}
+          call={call}
+          secondsLeft={callLeft}
+          onAccept={(media) => acceptCall(call, media)}
+          onDecline={() => declineCall(call)}
+        />
       )}
 
       {/* ── Исходящий звонок: дозвон, ещё не разговор ── */}
@@ -4094,7 +4331,7 @@ export default function App() {
             <div className="dialing-state">
               {call.phase === 'connecting'
                 ? 'Соединяем…'
-                : <>Вызов… <span className="dialing-left">{callLeft} с</span></>}
+                : <>{call.kind === 'audio' ? 'Аудиозвонок' : 'Видеозвонок'}… <span className="dialing-left">{callLeft} с</span></>}
             </div>
             {/* Выход должен быть на любой фазе. Раньше в «Соединяем» кнопки не
                 было вовсе, и человек оказывался заперт в карточке без выхода:
@@ -4279,32 +4516,104 @@ export default function App() {
             {searchResults.length > 0 && (
               <div className="search-results">
                 {searchResults
-                  .filter(u => u.username !== authUser?.username)
-                  .map(u => (
-                    <div className="contact-row" key={u.username}>
-                      <span className="contact-name">
-                        {u.display_name || u.username}
-                        <span className="contact-nick"> @{u.username}</span>
-                      </span>
-                      {contacts.some(c => c.contactUsername === u.username)
-                        ? <span className="contact-added">в контактах</span>
-                        : <button className="ghost-btn contact-btn" onClick={() => addContact(u.username)}>+ Добавить</button>}
-                    </div>
-                  ))}
+                  .filter(u => ukeyClient(u.username) !== ukeyClient(authUser?.username))
+                  .map(u => {
+                    const k = ukeyClient(u.username);
+                    const isFriend = contacts.some(c => ukeyClient(c.contactUsername) === k);
+                    const sent = outgoingReqs.some(x => ukeyClient(x) === k);
+                    const theyAsked = incomingReqs.some(x => ukeyClient(x) === k);
+                    return (
+                      <div className="contact-row" key={u.username}>
+                        <span className="contact-name">
+                          {u.display_name || u.username}
+                          <span className="contact-nick"> @{u.username}</span>
+                        </span>
+                        {/* Честный статус: раньше «Добавить» сразу делало
+                            человека контактом, теперь это только заявка */}
+                        {isFriend
+                          ? <span className="contact-added">в друзьях</span>
+                          : sent
+                            ? <span className="contact-added">заявка отправлена</span>
+                            : theyAsked
+                              ? <button className="ghost-btn contact-btn contact-btn--accept" onClick={() => acceptFriend(u.username)}>Принять заявку</button>
+                              : <button className="ghost-btn contact-btn" onClick={() => addContact(u.username)}><Icon name="plus" size={14} /> В друзья</button>}
+                      </div>
+                    );
+                  })}
               </div>
             )}
+
+            {/* Заявки ко мне — прямо здесь, чтобы их не пришлось искать */}
+            {incomingReqs.length > 0 && (
+              <div className="friends-section">
+                <div className="friends-section-title">Хотят добавить вас в друзья</div>
+                {incomingReqs.map(u => (
+                  <div className="contact-row" key={`in-${u}`}>
+                    <span className="contact-name">@{u}</span>
+                    <span className="contact-actions">
+                      <button className="ghost-btn contact-btn contact-btn--accept" onClick={() => acceptFriend(u)}>Принять</button>
+                      <button className="ghost-btn contact-btn" aria-label="Отклонить заявку" title="Отклонить" onClick={() => declineFriend(u)}><Icon name="close" size={16} /></button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="contacts-list">
-              {contacts.length === 0 && searchResults.length === 0
-                ? <div className="participants-empty">Найдите людей по нику и добавьте в контакты</div>
-                : contacts.map(c => (
-                    <div className="contact-row" key={c.contactUsername}>
-                      <span className="contact-name">@{c.contactUsername}</span>
-                      <span className="contact-actions">
-                        <button className="ghost-btn contact-btn contact-btn--call" onClick={() => { setIsContactsOpen(false); callContact(c.contactUsername); }}><Icon name="phone" size={14} /> Позвонить</button>
-                        <button className="ghost-btn contact-btn" title="Убрать из контактов" onClick={() => removeContact(c.contactUsername)}><Icon name="close" size={16} /></button>
-                      </span>
-                    </div>
-                  ))}
+              {contacts.length === 0 && outgoingReqs.length === 0 && incomingReqs.length === 0 && searchResults.length === 0 && (
+                <div className="participants-empty">
+                  Найдите человека по нику и отправьте заявку в друзья. Позвонить можно тем, кто её принял.
+                </div>
+              )}
+              {contacts.map(c => (
+                <div className="contact-row contact-row--friend" key={c.contactUsername}>
+                  {renaming?.username === c.contactUsername ? (
+                    <form className="contact-rename" onSubmit={e => { e.preventDefault(); saveAlias(); }}>
+                      <input
+                        autoFocus
+                        className="contact-rename-input"
+                        value={renaming.value}
+                        maxLength={60}
+                        placeholder={c.contactUsername}
+                        onChange={e => setRenaming(r => ({ ...r, value: e.target.value }))}
+                        onBlur={saveAlias}
+                      />
+                    </form>
+                  ) : (
+                    /* Имя — кнопка: тап даёт переименовать. Своё имя видно
+                       только вам, собеседник его не узнает. */
+                    <button
+                      className="contact-name contact-name--btn"
+                      title="Переименовать"
+                      onClick={() => setRenaming({ username: c.contactUsername, value: c.alias || '' })}
+                    >
+                      <span className="contact-name-text">{c.alias || c.contactUsername}</span>
+                      {c.alias && <span className="contact-nick">@{c.contactUsername}</span>}
+                      <Icon name="edit" size={13} />
+                    </button>
+                  )}
+                  <span className="contact-actions">
+                    <button className="ghost-btn contact-btn contact-btn--call" aria-label="Аудиозвонок" title="Аудиозвонок"
+                            onClick={() => { setIsContactsOpen(false); callContact(c.contactUsername, 'audio'); }}>
+                      <Icon name="phone" size={16} />
+                    </button>
+                    <button className="ghost-btn contact-btn contact-btn--call" aria-label="Видеозвонок" title="Видеозвонок"
+                            onClick={() => { setIsContactsOpen(false); callContact(c.contactUsername, 'video'); }}>
+                      <Icon name="camera" size={16} />
+                    </button>
+                    <button className="ghost-btn contact-btn" aria-label="Удалить из друзей" title="Удалить из друзей"
+                            onClick={() => { if (window.confirm(`Удалить ${c.alias || c.contactUsername} из друзей? Звонить друг другу вы больше не сможете.`)) removeContact(c.contactUsername); }}>
+                      <Icon name="close" size={16} />
+                    </button>
+                  </span>
+                </div>
+              ))}
+              {outgoingReqs.map(u => (
+                <div className="contact-row contact-row--pending" key={`out-${u}`}>
+                  <span className="contact-name">@{u}<span className="contact-nick"> · ждёт ответа</span></span>
+                  <button className="ghost-btn contact-btn" onClick={() => removeContact(u)}>Отменить</button>
+                </div>
+              ))}
             </div>
           </div>
         </aside>
@@ -4750,6 +5059,9 @@ export default function App() {
             </div>
             <div className="account-tabs">
               <button className={accountTab === 'profile' ? 'tab-btn tab-btn--active' : 'tab-btn'} onClick={() => setAccountTab('profile')}>Профиль</button>
+              <button className={accountTab === 'notifications' ? 'tab-btn tab-btn--active' : 'tab-btn'} onClick={() => setAccountTab('notifications')}>
+                Уведомления{incomingReqs.length > 0 && <span className="tab-badge">{incomingReqs.length}</span>}
+              </button>
               <button className={accountTab === 'rooms' ? 'tab-btn tab-btn--active' : 'tab-btn'} onClick={() => setAccountTab('rooms')}>Комнаты</button>
               <button className={accountTab === 'history' ? 'tab-btn tab-btn--active' : 'tab-btn'} onClick={() => setAccountTab('history')}>История</button>
               <button className={accountTab === 'recordings' ? 'tab-btn tab-btn--active' : 'tab-btn'} onClick={() => setAccountTab('recordings')}>Записи</button>
@@ -4758,6 +5070,52 @@ export default function App() {
             </div>
 
             {profileMsg && <div className="profile-msg">{profileMsg}</div>}
+
+            {/* Уведомления: заявки в друзья. Позвонить человеку можно, только
+                когда он принял заявку, поэтому ответ на неё — главное здесь. */}
+            {accountTab === 'notifications' && (
+              <div className="account-section">
+                <div className="notif-title"><Icon name="bell" size={16} /> Заявки в друзья</div>
+                {incomingReqs.length === 0 ? (
+                  <div className="participants-empty">Новых заявок нет. Когда кто-то захочет добавить вас в друзья, заявка появится здесь.</div>
+                ) : (
+                  <div className="notif-list">
+                    {incomingReqs.map(u => (
+                      <div className="notif-item" key={`n-${u}`}>
+                        <div className="notif-avatar">{(u || '?')[0].toUpperCase()}</div>
+                        <div className="notif-body">
+                          <div className="notif-name">@{u}</div>
+                          <div className="notif-text">хочет добавить вас в друзья</div>
+                        </div>
+                        <div className="notif-actions">
+                          <button className="primary-btn notif-btn" onClick={() => acceptFriend(u)}>Принять</button>
+                          <button className="ghost-btn notif-btn" onClick={() => declineFriend(u)}>Отклонить</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {outgoingReqs.length > 0 && (
+                  <>
+                    <div className="notif-title notif-title--sub">Ваши заявки ждут ответа</div>
+                    <div className="notif-list">
+                      {outgoingReqs.map(u => (
+                        <div className="notif-item notif-item--muted" key={`o-${u}`}>
+                          <div className="notif-avatar">{(u || '?')[0].toUpperCase()}</div>
+                          <div className="notif-body">
+                            <div className="notif-name">@{u}</div>
+                            <div className="notif-text">ещё не ответил</div>
+                          </div>
+                          <div className="notif-actions">
+                            <button className="ghost-btn notif-btn" onClick={() => removeContact(u)}>Отменить</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
 
             {accountTab === 'business' && (
               <div className="account-section">
@@ -5570,7 +5928,14 @@ export default function App() {
                 </button>
               ) : authUser ? (
                 <>
-                  <button className="ghost-btn account-toggle-btn" onClick={() => setIsAccountPanelOpen(p => !p)}><Icon name="menu" size={16} /> Аккаунт</button>
+                  <button className="ghost-btn account-toggle-btn" onClick={() => {
+                    // есть новые заявки — открываем прямо на них
+                    if (incomingReqs.length > 0) setAccountTab('notifications');
+                    setIsAccountPanelOpen(p => !p);
+                  }}>
+                    <Icon name="menu" size={16} /> Аккаунт
+                    {incomingReqs.length > 0 && <span className="tab-badge">{incomingReqs.length}</span>}
+                  </button>
                   <button className="ghost-btn logout-btn" onClick={() => {
                     localStorage.removeItem('token');
                     setAuthUser(null);
@@ -5638,6 +6003,7 @@ export default function App() {
                   {authUser ? (
                     <button className={`ghost-btn${isContactsOpen ? ' active' : ''}`} onClick={() => setIsContactsOpen(p => !p)}>
                       <Icon name="users" size={16} /> Контакты{contacts.length > 0 ? ` (${contacts.length})` : ''}
+                      {incomingReqs.length > 0 && <span className="tab-badge">{incomingReqs.length}</span>}
                     </button>
                   ) : (
                     <button className="ghost-btn" onClick={() => setShowAuth(true)}>
@@ -5749,6 +6115,34 @@ export default function App() {
 
           {/* Video area — full window; тап (телефон) показывает/прячет управление */}
           <div ref={stageRef} className={`video-stage${isScreenFullscreen ? ' video-stage--fs' : ''}${selfBig ? ' video-stage--selfbig' : ''}`} onClick={isTouchDevice ? onStageTap : undefined}>
+            {/* Аудиозвонок: смотреть не на что, поэтому вместо сцены — крупно
+                тот, с кем говоришь, и видно, кто сейчас говорит. Тап по экрану
+                работает как и в видео: показывает и прячет кнопки. */}
+            {showAudioStage && (
+              <div className="audio-stage">
+                <div className="audio-kind">
+                  <Icon name="phone" size={14} /> Аудиозвонок
+                  {formattedCallTime && <span className="audio-timer">{formattedCallTime}</span>}
+                </div>
+                <div className="audio-people">
+                  {remotes.length === 0 && (
+                    <div className="audio-waiting">Ждём собеседника…</div>
+                  )}
+                  {remotes.map(p => {
+                    const name = contactLabel(displayName(p));
+                    const micPub = p.getTrackPublication(LK.Track.Source.Microphone);
+                    const muted = !micPub || micPub.isMuted;
+                    return (
+                      <div key={p.identity} className={`audio-person${p.isSpeaking ? ' audio-person--speaking' : ''}${remotes.length > 1 ? ' audio-person--sm' : ''}`}>
+                        <div className="audio-avatar">{(name || '?')[0].toUpperCase()}</div>
+                        <div className="audio-name">{name}</div>
+                        {muted && <div className="audio-muted"><Icon name="micOff" size={13} /> без звука</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {stage ? (
               <div className="presenter-layout">
                 {/* Крупно идёт либо показ экрана, либо то, что человек выбрал
@@ -5984,7 +6378,7 @@ export default function App() {
             {/* Своё видео. На телефоне по умолчанию плавающее окно, на компе
                 оно всегда в общей сетке. Размер и положение задаются числами,
                 поэтому открытие и закрытие идут одной и той же анимацией. */}
-            {localP && (!selfInGrid || selfBig) && (
+            {localP && !showAudioStage && (!selfInGrid || selfBig) && (
               <>
                 {selfBig && <div className="self-scrim" onClick={(e) => { e.stopPropagation(); setSelfBig(false); }} />}
                 <div
@@ -6023,6 +6417,30 @@ export default function App() {
                 ))}
               </div>
             )}
+            {showAudioStage ? (
+            /* Аудиозвонок: только то, что нужно в разговоре по телефону.
+               «Видео» включает камеру — и звонок сам становится видео. */
+            <div className="controls-grid controls-grid--audio">
+              <button className={`ctrl-round ${isMuted ? 'ctrl-round--off' : ''}`} title={isMuted ? 'Включить микрофон' : 'Выключить микрофон'} aria-label={isMuted ? 'Включить микрофон' : 'Выключить микрофон'} onClick={toggleMute}>
+                <Icon name={isMuted ? 'micOff' : 'mic'} size={22} />
+              </button>
+              {IS_IOS_APP && (
+                <button className={`ctrl-round ${speakerOn ? 'ctrl-round--active' : ''}`} title={speakerOn ? 'Разговорный динамик' : 'Громкая связь'} aria-label="Динамик" onClick={toggleSpeaker}>
+                  <Icon name="volume" size={22} />
+                </button>
+              )}
+              <button className="ctrl-round" title="Включить видео" aria-label="Включить видео" onClick={toggleCamera}>
+                <Icon name="camera" size={22} />
+              </button>
+              <button className={`ctrl-round ${isChatOpen ? 'ctrl-round--active' : ''}`} title="Чат" aria-label="Чат" onClick={() => setIsChatOpen(p => !p)}>
+                <Icon name="chat" size={22} />
+                {chatUnread > 0 && <span className="ctrl-badge">{chatUnread}</span>}
+              </button>
+              <button className="ctrl-round ctrl-round--danger" title="Завершить звонок" aria-label="Завершить звонок" onClick={leaveCall}>
+                <Icon name="phoneOff" size={22} />
+              </button>
+            </div>
+            ) : (
             <div className="controls-grid">
             <button className={`ctrl-round ${isMuted ? 'ctrl-round--off' : ''}`} title={isMuted ? 'Включить микрофон' : 'Выключить микрофон'} onClick={toggleMute}>
               <Icon name={isMuted ? 'micOff' : 'mic'} size={22} />
@@ -6074,6 +6492,7 @@ export default function App() {
               <Icon name="phoneOff" size={22} />
             </button>
             </div>
+            )}
           </div>
         </div>
       )}

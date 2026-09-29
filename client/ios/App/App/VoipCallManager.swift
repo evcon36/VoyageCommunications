@@ -440,6 +440,7 @@ final class VoipCallManager: NSObject {
     // ответили в самом приложении, звонящий отменил, истёк таймаут. Без этого
     // на телефоне остаётся висеть «активный» звонок, которого уже нет.
     func endCall(callId: String) {
+        kindByCallId.removeValue(forKey: callId)
         guard let uuid = uuidByCallId[callId] else { return }
         provider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
         uuidByCallId.removeValue(forKey: callId)
@@ -453,14 +454,39 @@ final class VoipCallManager: NSObject {
 
     // Категорию и режим объявляем сами, включает сессию потом система
     // (didActivate). Своими руками включать нельзя: CallKit ведёт звук сам.
-    private func configureAudioSession() {
+    //
+    // Видеозвонок идёт через громкий динамик — телефон держат перед собой.
+    // Аудиозвонок — через разговорный, как обычный телефонный: телефон
+    // подносят к уху, и громкий динамик там только мешает.
+    private func configureAudioSession(speaker: Bool = true) {
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .voiceChat,
-                                    options: [.allowBluetooth, .defaultToSpeaker])
+            var options: AVAudioSession.CategoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+            if speaker { options.insert(.defaultToSpeaker) }
+            try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
         } catch {
             log("аудиосессия не настроилась", error.localizedDescription)
         }
+    }
+
+    // Переключатель «динамик» в самом звонке и выбор маршрута при входе.
+    // Веб-слой зовёт это после входа в комнату: к этому моменту движок
+    // звонка уже поднял свою сессию, и наш выбор её не перетрёт.
+    func setAudioRoute(speaker: Bool) {
+        configureAudioSession(speaker: speaker)
+        do {
+            try AVAudioSession.sharedInstance().overrideOutputAudioPort(speaker ? .speaker : .none)
+            log("звук", speaker ? "громкий динамик" : "разговорный динамик")
+        } catch {
+            log("звук не переключился", error.localizedDescription)
+        }
+    }
+
+    // Датчик приближения: в аудиозвонке телефон у уха, и экран должен гаснуть,
+    // иначе щека нажимает кнопки. В видеозвонке его выключаем — там экран
+    // смотрят, а не прикладывают.
+    func setProximity(_ on: Bool) {
+        onMain { UIDevice.current.isProximityMonitoringEnabled = on }
     }
 
     // Между «ответил» и «разговор пошёл» у нас провал в несколько секунд, а на
@@ -521,11 +547,15 @@ final class VoipCallManager: NSObject {
 
     // Показ входящего звонка системе. Вынесено из обработчика пуша: этим же
     // путём звонок показывает отладочный стенд.
-    func reportIncoming(callId: String, fromName: String, completion: @escaping () -> Void) {
+    func reportIncoming(callId: String, fromName: String, kind: String = "video",
+                        completion: @escaping () -> Void) {
         let update = CXCallUpdate()
         update.remoteHandle = CXHandle(type: .generic, value: fromName)
         update.localizedCallerName = fromName
-        update.hasVideo = true
+        // Аудиозвонок система показывает как обычный телефонный: без значка
+        // видео, и на экране блокировки он выглядит как звонок по телефону
+        update.hasVideo = kind != "audio"
+        kindByCallId[callId] = kind
         update.supportsHolding = false
         update.supportsGrouping = false
         update.supportsUngrouping = false
@@ -565,8 +595,10 @@ extension VoipCallManager: PKPushRegistryDelegate {
 
         let callId = data["callId"] as? String ?? UUID().uuidString
         let fromName = data["fromName"] as? String ?? "Voyage Coms"
-        log("пуш пришёл", "\(callId), состояние \(appStateName())")
-        reportIncoming(callId: callId, fromName: fromName, completion: completion)
+        // Старый сервер тип не присылает — тогда это видеозвонок, как раньше
+        let kind = (data["kind"] as? String) == "audio" ? "audio" : "video"
+        log("пуш пришёл", "\(callId), \(kind == "audio" ? "аудио" : "видео"), состояние \(appStateName())")
+        reportIncoming(callId: callId, fromName: fromName, kind: kind, completion: completion)
     }
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType) {
@@ -578,6 +610,9 @@ extension VoipCallManager: PKPushRegistryDelegate {
 // uuid (для CallKit) -> callId (наш, серверный) и обратно
 private var callUUIDs: [UUID: String] = [:]
 private var uuidByCallId: [String: UUID] = [:]
+// callId -> «audio» | «video»: от него зависят маршрут звука и датчик
+// приближения в момент ответа
+private var kindByCallId: [String: String] = [:]
 
 extension VoipCallManager: CXProviderDelegate {
     func providerDidReset(_ provider: CXProvider) {
@@ -598,10 +633,12 @@ extension VoipCallManager: CXProviderDelegate {
         // ответа. Без этого при заблокированном экране iOS считает вызов
         // несостоявшимся и показывает «сбой вызова»: приложение ответило,
         // но разговором так и не занялось.
-        configureAudioSession()
-        log("ответили", "\(callId.isEmpty ? "номер потерян" : callId), состояние \(appStateName())")
-        pendingCall = ["type": "answered", "callId": callId]
-        post(.voipCallAnswered, ["callId": callId])
+        let kind = kindByCallId[callId] ?? "video"
+        configureAudioSession(speaker: kind != "audio")
+        if kind == "audio" { setProximity(true) }
+        log("ответили", "\(callId.isEmpty ? "номер потерян" : callId), \(kind == "audio" ? "аудио" : "видео"), состояние \(appStateName())")
+        pendingCall = ["type": "answered", "callId": callId, "kind": kind]
+        post(.voipCallAnswered, ["callId": callId, "kind": kind])
         action.fulfill()
     }
 

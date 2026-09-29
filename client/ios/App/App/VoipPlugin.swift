@@ -15,6 +15,8 @@ public class VoipPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "note", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "request", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setAudioRoute", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setProximity", returnType: CAPPluginReturnPromise),
     ]
 
     override public func load() {
@@ -88,6 +90,19 @@ public class VoipPlugin: CAPPlugin, CAPBridgedPlugin {
             if let error = error { call.reject(error); return }
             call.resolve(["status": status, "body": text])
         }
+    }
+
+    // Громкий или разговорный динамик — кнопка «Динамик» в аудиозвонке и
+    // выбор по умолчанию при входе: видео на громком, аудио у уха.
+    @objc func setAudioRoute(_ call: CAPPluginCall) {
+        VoipCallManager.shared.setAudioRoute(speaker: call.getBool("speaker") ?? true)
+        call.resolve()
+    }
+
+    // Датчик приближения: гасит экран, когда телефон у уха
+    @objc func setProximity(_ call: CAPPluginCall) {
+        VoipCallManager.shared.setProximity(call.getBool("on") ?? false)
+        call.resolve()
     }
 
     @objc private func onTokenUpdated(_ note: Notification) {

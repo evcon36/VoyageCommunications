@@ -13,6 +13,7 @@ const internalRoutes = require('./src/routes/internal.routes');
 const prisma = require('./src/lib/prisma');
 const recTimeline = require('./src/lib/recTimeline');
 const ukey = require('./src/lib/username');
+const friends = require('./src/lib/friends');
 const { verifyToken } = require('./src/lib/jwt');
 const jwt = require('jsonwebtoken');
 const moderationRoutes = require('./src/routes/moderation.routes');
@@ -117,6 +118,9 @@ const CALL_TIMEOUT_MS = 45000;
 function emitTo(username, event, payload) {
   for (const sid of onlineUsers.get(ukey(username)) || []) io.to(sid).emit(event, payload);
 }
+// Маршрутам (заявки в друзья) нужно достучаться до человека по нику, а
+// импортировать сервер оттуда нельзя — получится круг.
+global.emitToUser = emitTo;
 
 // Занят, если уже в комнате или в процессе другого звонка.
 // Без этой проверки второй входящий молча перезатирал первый, и человек
@@ -230,8 +234,11 @@ async function endSession(socket) {
 // «досылку» в обработчике presence ниже).
 async function wakeViaVoip(username, call) {
   try {
+    // Регистр: проверка «есть ли токен» в call-start уже шла через lower(),
+    // а сама отправка — посимвольно. Контакт, записанный строчными, проходил
+    // проверку, и пуш уходил в пустоту: телефон не звонил вовсе.
     const rows = await prisma.$queryRaw`
-      SELECT token FROM "VoipPushToken" WHERE username = ${username} AND platform = 'ios'
+      SELECT token FROM "VoipPushToken" WHERE lower(username) = ${ukey(username)} AND platform = 'ios'
     `;
     if (!rows || rows.length === 0) return;
     const payload = {
@@ -241,6 +248,9 @@ async function wakeViaVoip(username, call) {
       fromName: call.fromName,
       roomSlug: call.roomSlug,
       inviteKey: call.inviteKey,
+      // Аудиозвонок система показывает как обычный телефонный: без кнопки
+      // видео и с разговорным динамиком по умолчанию
+      kind: call.kind,
     };
     await Promise.all(rows.map((r) => sendVoipPush(r.token, payload)));
   } catch (e) {
@@ -335,7 +345,7 @@ io.on('connection', (socket) => {
       if (ukey(call.to) === ukey(name) && call.state === 'ringing') {
         socket.emit('call-incoming', {
           callId: call.callId, from: call.from, fromName: call.fromName,
-          roomSlug: call.roomSlug, inviteKey: call.inviteKey,
+          roomSlug: call.roomSlug, inviteKey: call.inviteKey, kind: call.kind,
         });
       }
     }
@@ -353,11 +363,22 @@ io.on('connection', (socket) => {
   // «дозвон». Состояние живёт здесь, клиенты только отражают присланное —
   // иначе两 стороны расходятся и звонок зависает.
 
-  socket.on('call-start', async ({ toUsername, roomSlug, inviteKey, fromName }) => {
+  socket.on('call-start', async ({ toUsername, roomSlug, inviteKey, fromName, kind }) => {
     const from = socket.data.presenceUsername;
     const to = String(toUsername || '');
     if (!from || !to) return;
     if (ukey(from) === ukey(to)) return endToCaller(socket, 'self');
+    // Старые клиенты тип не присылают — для них звонок, как и раньше, видео
+    const callKind = kind === 'audio' ? 'audio' : 'video';
+
+    // Звонить можно только другу — тому, кто принял заявку. Раньше любой
+    // звонил любому, достаточно было знать ник. Правило стоит за
+    // переключателем: выпущенная версия 1.0 о заявках не знает, и включить
+    // его до выхода новой значит оставить всех на 1.0 без звонков. Причину
+    // называем прямо: человеку нужно понять, что делать — отправить заявку.
+    if (friends.friendsRequired() && !(await friends.areFriends(from, to))) {
+      return endToCaller(socket, 'not-friends');
+    }
 
     // Чёрный список работает в обе стороны: иначе заблокированный просто
     // звонит сам и запрет ничего не значит. Причину не раскрываем: человеку
@@ -385,8 +406,13 @@ io.on('connection', (socket) => {
     if (isBusy(to)) return endToCaller(socket, 'busy');
 
     const callId = `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    // Получатель видит звонящего под тем именем, под которым записал его у
+    // себя в контактах, — как в обычной телефонной книге. Нет своего имени —
+    // то, что прислал звонящий.
+    const calleeAlias = await friends.aliasOf(to, from).catch(() => null);
     const call = {
-      callId, from, to, roomSlug, inviteKey, fromName: fromName || from, state: 'ringing',
+      callId, from, to, roomSlug, inviteKey, kind: callKind,
+      fromName: calleeAlias || fromName || from, state: 'ringing',
       // нужен, чтобы ответ ушёл именно тому устройству, с которого звонили
       fromSocketId: socket.id,
     };
@@ -397,7 +423,7 @@ io.on('connection', (socket) => {
     activeCalls.set(callId, call);
 
     for (const sid of targets || []) {
-      io.to(sid).emit('call-incoming', { callId, from, fromName: call.fromName, roomSlug, inviteKey });
+      io.to(sid).emit('call-incoming', { callId, from, fromName: call.fromName, roomSlug, inviteKey, kind: callKind });
     }
     // Пуш нужен, когда приложение не на экране: свёрнутое держит соединение
     // живым, но система его усыпляет, и показать звонок некому. А вот когда
@@ -638,3 +664,11 @@ app.get('/', (_, res) => res.send('Backend is running'));
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, '0.0.0.0', () => console.log('Server started on port', PORT));
+
+// Таблица дружбы и переезд старых односторонних контактов. Сбой здесь не
+// должен ронять сервер звонков: без таблицы не работают только заявки, а
+// переезд докончит первый же запрос списка контактов.
+friends.ensureSchema()
+  .then(() => friends.migrateLegacyAll())
+  .then((r) => console.log(`FRIENDS: схема готова, старые контакты переложены у ${r.moved} из ${r.owners}`))
+  .catch((e) => console.error('FRIENDS SCHEMA ERROR:', e.message));

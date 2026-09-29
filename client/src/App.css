@@ -2346,7 +2346,7 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
 .call-fullscreen,
 .chat-overlay:not(.chat-overlay--page),
 .sounds-panel-backdrop, .sounds-panel,
-.dialing-shell, .admin-overlay {
+.dialing-shell, .admin-overlay, .lobby {
   /* Переназначить токены мало: color наследуется вычисленным значением, а не
      пересчитывается. Потомки, у которых нет своего color, донаследовали тёмный
      текст светлой темы — и заголовок «Контакты» оказывался тёмным по тёмному.
@@ -3974,4 +3974,301 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
     border-radius: 20px 20px 0 0;
     padding-bottom: calc(20px + env(safe-area-inset-bottom));
   }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   Друзья, уведомления, аудиозвонок, комната ожидания (29.09.2026)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Счётчик новых заявок ──
+   Круглый, на кнопке «Аккаунт», «Контакты» и на вкладке «Уведомления». */
+.tab-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 6px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Контакты ── */
+.contact-row--friend { gap: 8px; }
+/* Имя — кнопка переименования: выглядит как текст, карандаш подсказывает */
+.contact-name--btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 4px 0;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+  padding-right: 18px;
+}
+.contact-name--btn svg { position: absolute; right: 0; top: 50%; transform: translateY(-50%); opacity: .45; }
+.contact-name-text {
+  font-size: 15px;
+  font-weight: 500;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.contact-name--btn .contact-nick { font-size: 12px; }
+.contact-rename { flex: 1 1 auto; min-width: 0; }
+.contact-rename-input {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--accent-border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 16px;               /* меньше 16 — iOS зумит страницу */
+  outline: none;
+}
+/* Кнопки звонка квадратные и одного размера: аудио, видео, удалить */
+.contact-row--friend .contact-btn { width: 40px; padding: 0; display: grid; place-items: center; }
+.contact-row--pending .contact-name { color: var(--text-dim); }
+.contact-btn--accept {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--accent-text);
+}
+.friends-section {
+  margin-bottom: 10px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
+  border: 1px solid var(--accent-border);
+}
+.friends-section-title {
+  padding: 10px 12px 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-text);
+}
+/* Панель контактов вне звонка светлая в светлой теме — бледно-зелёный
+   текст «в друзьях» и звонка на белом не читался */
+:root[data-theme="light"] .chat-overlay--page .contact-added,
+:root[data-theme="light"] .chat-overlay--page .contact-btn--call { color: #15803d; border-color: rgba(21,128,61,.35); }
+
+/* ── Уведомления ── */
+.notif-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.notif-title--sub { margin-top: 22px; font-size: 13px; color: var(--text-dim); }
+.notif-list { display: flex; flex-direction: column; gap: 8px; }
+.notif-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  flex-wrap: wrap;               /* на узком экране кнопки уходят вниз */
+}
+.notif-item--muted { opacity: .75; }
+.notif-avatar {
+  flex: 0 0 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.notif-body { flex: 1 1 140px; min-width: 0; }
+.notif-name { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notif-text { font-size: 13px; color: var(--text-dim); }
+.notif-actions { display: flex; gap: 8px; flex: 1 1 100%; }
+.notif-btn { flex: 1 1 0; height: 40px; }
+@media (min-width: 520px) {
+  .notif-actions { flex: 0 0 auto; }
+  .notif-btn { flex: 0 0 auto; padding: 0 16px; }
+}
+
+/* ── Аудиозвонок ──
+   Смотреть не на что, поэтому крупно тот, с кем говоришь. Говорящего видно
+   по кольцу — это главное, что нужно знать в разговоре без картинки. */
+.audio-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  padding: calc(env(safe-area-inset-top) + 60px) 24px calc(env(safe-area-inset-bottom) + 170px);
+  background:
+    radial-gradient(120% 70% at 50% 30%, color-mix(in srgb, var(--accent) 10%, #0b0c10) 0%, #0b0c10 60%);
+  color: #eef1f5;
+}
+.audio-kind {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #9aa3b0;
+}
+.audio-timer { font-variant-numeric: tabular-nums; color: #eef1f5; }
+.audio-people {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 28px 36px;
+  max-width: 100%;
+}
+.audio-person { display: flex; flex-direction: column; align-items: center; gap: 12px; min-width: 0; }
+.audio-avatar {
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 52px;
+  font-weight: 700;
+  color: #201900;
+  background: linear-gradient(160deg, #fbd35f, #e9b820);
+  box-shadow: 0 0 0 0 rgba(247,201,72,0);
+  transition: box-shadow .18s ease, transform .18s ease;
+}
+.audio-person--sm .audio-avatar { width: 92px; height: 92px; font-size: 36px; }
+/* Кольцо говорящего: мягкое, не мигающее — моргание в разговоре утомляет */
+.audio-person--speaking .audio-avatar {
+  box-shadow: 0 0 0 6px rgba(247,201,72,.28), 0 0 0 14px rgba(247,201,72,.12);
+  transform: scale(1.03);
+}
+.audio-name {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 22px;
+  font-weight: 600;
+}
+.audio-person--sm .audio-name { font-size: 16px; max-width: 150px; }
+.audio-muted { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #fca5a5; }
+.audio-waiting { font-size: 16px; color: #9aa3b0; }
+@media (prefers-reduced-motion: reduce) {
+  .audio-avatar { transition: none; }
+  .audio-person--speaking .audio-avatar { transform: none; }
+}
+/* Кнопок в аудиозвонке меньше — в одну строку, того же размера, что и в видео */
+@media (pointer: coarse) {
+  .controls-grid--audio {
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+  }
+}
+
+/* ── Комната ожидания входящего звонка ── */
+.lobby {
+  position: fixed;
+  inset: 0;
+  z-index: 330;
+  display: grid;
+  place-items: center;
+  padding: calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 16px);
+  background: #0b0c10;
+  color: var(--text);
+  overflow-y: auto;
+}
+.lobby-card {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+}
+.lobby-caller { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
+.lobby-avatar {
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 34px;
+  font-weight: 700;
+  color: #201900;
+  background: linear-gradient(160deg, #fbd35f, #e9b820);
+  animation: dialPulse 1.8s ease-in-out infinite;
+}
+.lobby-from {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.lobby-kind { font-size: 14px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+/* Превью своей камеры — вертикальное, как видео с фронтальной камеры
+   телефона; зеркально, как в любой звонилке: иначе движения идут наоборот */
+.lobby-preview {
+  width: min(100%, 260px);
+  aspect-ratio: 3 / 4;
+  border-radius: 20px;
+  overflow: hidden;
+  background: #16181d;
+  border: 1px solid var(--edge);
+}
+.lobby-video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; }
+.lobby-preview-off {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.lobby-toggles { display: flex; gap: 16px; }
+.lobby-actions { display: flex; gap: 12px; width: 100%; }
+.lobby-btn {
+  flex: 1 1 0;
+  height: 54px;
+  border-radius: 16px;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.lobby-btn--decline { background: var(--danger); color: #fff; }
+.lobby-btn--accept { background: #22c55e; color: #052e12; }
+.lobby-btn:active { transform: scale(.97); }
+/* Низкий экран (телефон лёжа) — превью меньше, чтобы кнопки остались на экране */
+@media (max-height: 560px) {
+  .lobby-card { gap: 14px; }
+  .lobby-preview { width: min(100%, 150px); }
+  .lobby-avatar { width: 64px; height: 64px; font-size: 26px; }
 }
