@@ -2705,23 +2705,86 @@ img.company-member-avatar, img.emp-avatar, img.analytics-av {
   flex: 0 0 auto;
   transition: height .28s cubic-bezier(.32,.72,0,1);
 }
-/* ── Собеседник один ──
-   Плитка принимает пропорцию потока, и в портретный экран вертикальное видео
-   входит по ширине — остаток по высоте центрирование делило пополам, и сверху
-   и снизу выходило по чёрной полосе. Обрезать нельзя (правило владельца:
-   видео показывается целиком), поэтому просто не делим: прижимаем к низу,
-   и весь остаток собирается в одну полосу сверху. Там же лежит верхняя
-   панель с названием комнаты и связью — теперь она на полосе, а не на лице.
-   Сетка из нескольких человек по-прежнему центрируется. */
+/* ── Собеседник один: во весь экран ──
+   Плитка размером со сцену, без отступов: видео идёт под вырез и полосу
+   жестов, как в FaceTime и Telegram. Кнопки и верхняя панель плавают
+   поверху и видео не двигают. Раньше плитка принимала форму потока и
+   прижималась к низу: сверху оставалась полоса в пятую часть экрана, а
+   при смене пропорции потока плитка плавно становилась ниже и картинка
+   «уезжала» вниз. */
 .tile-rows--solo {
-  justify-content: flex-end;
-  padding-bottom: 0;
+  padding: 0;
+  gap: 0;
+}
+.tile-rows--solo .participant-tile.participant-tile--solo {
+  width: 100%;
+  height: 100%;
+  flex: 1 1 auto;
+  border: 0;
+  border-radius: 0;
+  transition: none;
+  background: #000;
+}
+/* Кадр всегда лежит целиком (contain); «во весь экран» — это тот же кадр,
+   увеличенный до краёв (scale считает плитка). Переход между режимами —
+   плавное масштабирование, а не скачок. */
+.participant-tile--solo .tile-video {
+  position: relative;
+  z-index: 1;
+  object-fit: contain;
+  /* Только центр: кадр увеличивается ровно до краёв, и любой сдвиг точки
+     увеличения вывел бы его за край — открылась бы та же чёрная полоса. */
+  transform-origin: 50% 50%;
+  transition: transform .38s cubic-bezier(.32,.72,0,1);
+}
+/* Размытая копия того же потока под кадром — вместо чёрных полос, когда
+   кадр показан целиком. Блюрим маленький элемент и растягиваем его: на
+   весь экран размытие на каждом кадре заметно грело бы телефон, а с
+   растяжения мягкость приходит даром. */
+.tile-rows--solo .participant-tile--solo video.tile-backdrop {
+  /* селектор длинный нарочно: общее правило сетки «видео целиком»
+     (.tile-rows .participant-tile video) иначе перебивало cover, и
+     подложка тоже рисовалась узкой полосой посередине */
+  object-fit: cover;
+  inset: auto;
+  /* края размытия гаснут в прозрачность — выносим их за экран, иначе по
+     кромке видна тёмная рамка: от -6% до +118% по обеим осям */
+  top: -6%; left: -6%;
+  width: 25%;
+  height: 25%;
+  transform: scale(4.96);
+  transform-origin: 0 0;
+  filter: blur(6px) brightness(0.55) saturate(1.2);
+  opacity: 0;
+  transition: opacity .3s ease;
+}
+.tile-rows--solo .participant-tile--solo.participant-tile--fit video.tile-backdrop { opacity: 1; }
+/* Подсветка говорящего во весь экран — жёлтая рамка по краю телефона.
+   Собеседник один, и кто говорит, понятно и так. */
+.participant-tile--solo.participant-tile--speaking { box-shadow: none; }
+@media (prefers-reduced-transparency: reduce) {
+  .participant-tile--solo .tile-backdrop { display: none !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .participant-tile--solo .tile-video { transition: none; }
+}
+/* Подпись с именем — над полосой жестов, а не под ней */
+.participant-tile--solo .tile-footer {
+  padding-bottom: calc(6px + env(safe-area-inset-bottom));
+  padding-left: calc(10px + env(safe-area-inset-left));
+  padding-right: calc(10px + env(safe-area-inset-right));
+}
+/* Квадратики выключенных камер в этом режиме поверх видео под верхней
+   панелью: в поток их ставить некуда, плитка занимает всё. */
+.tile-rows--solo .off-row {
+  position: absolute;
+  top: calc(env(safe-area-inset-top) + 64px);
+  left: 0; right: 0;
+  z-index: 4;
+  margin: 0;
 }
 
 .tile-rows .participant-tile { border-radius: 14px; }
-/* Видео доходит до самого низа, поэтому нижние углы у него не скруглены:
-   скругление на краю экрана читается как недоделанная вёрстка. */
-.tile-rows--solo .participant-tile { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
 /* Видео показывается целиком: обрезки нет нигде. Плитке заранее задана
    пропорция потока, так что полос обычно не видно, но пока пропорция ещё
    не измерена, contain покажет поля, а cover срезал бы человеку пол-лица. */

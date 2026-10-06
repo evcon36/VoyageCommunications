@@ -327,6 +327,15 @@ function startRingTone(kind) {
 const SPEAKER_FROM = 6;      // на телефоне с этого числа — главный + лента
 const TILE_GAP = 8;
 const DEFAULT_ASPECT = 9 / 16;
+// Собеседник один — его видео занимает весь экран. Если кадр и экран почти
+// одной формы, кадр увеличивается до краёв и теряет узкие полоски по бокам;
+// если формы разные (ноутбук в горизонтали на телефоне в вертикали), кадр
+// показывается целиком на размытой копии самого себя. Граница — доля одной
+// стороны, которую срезало бы увеличение: вертикальное 9:16 на айфоне теряет
+// 18% ширины (по 9% с боков, лицо в центре целое) — заполняем; 3:4 потеряло
+// бы 39%, а горизонтальное 74% — там уже уши и второй человек. Так же делает
+// Telegram: заполняет, только когда пропорции близки.
+const SOLO_FILL_MAX_LOSS = 0.22;
 
 // ── Плавающее окно своей камеры (только на телефоне) ──
 // Длинная сторона задана, короткая считается из пропорции потока: окно
@@ -561,7 +570,7 @@ function ScreenShareTile({ participant, isLocal }) {
 }
 
 // --- Single participant tile ---
-function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMuted, onToggleMute, backdrop, gridSpan, onMeta, onClick }) {
+function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMuted, onToggleMute, backdrop, gridSpan, onMeta, onClick, solo }) {
   const videoRef = useRef(null);
   const backdropRef = useRef(null);
   const [hasVideo, setHasVideo] = useState(false);
@@ -664,10 +673,20 @@ function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMute
     return () => { if (track) { try { track.detach(bg); } catch {} } };
   }, [backdrop, participant, isLocal, hasVideo]);
 
-  const mirrorStyle =
-    isLocal && isFrontCamera && !isCamOff
-      ? { transform: 'scaleX(-1)', WebkitTransform: 'scaleX(-1)' }
-      : {};
+  const mirror = isLocal && isFrontCamera && !isCamOff;
+  // Собеседник один и занимает весь экран (solo). Видео всегда лежит как
+  // contain — целиком, — а «во весь экран» достигается увеличением этого же
+  // кадра до краёв. Так переход между режимами — плавное масштабирование, а
+  // не скачок object-fit. Множитель считаем по своей, свежей пропорции
+  // потока: у родителя она загрублена порогом в 8%, и с ней по краю
+  // оставалась бы щель.
+  let soloScale = 1;
+  if (solo?.fill && videoAspect && solo.stageAspect) {
+    soloScale = Math.max(videoAspect, solo.stageAspect) / Math.min(videoAspect, solo.stageAspect);
+  }
+  const videoTransform = [soloScale !== 1 ? `scale(${soloScale.toFixed(4)})` : '', mirror ? 'scaleX(-1)' : '']
+    .filter(Boolean).join(' ');
+  const mirrorStyle = videoTransform ? { transform: videoTransform, WebkitTransform: videoTransform } : {};
 
   // Плитка сообщает наверх только пропорцию потока, чтобы её подогнали под
   // видео. Факт «камера выключена» она НЕ сообщает: это решает родитель по
@@ -678,7 +697,7 @@ function ParticipantTile({ participant, isLocal, isFrontCamera, small, localMute
 
   return (
     <div
-      className={`participant-tile${small ? ' participant-tile--small' : ''}${isSpeaking ? ' participant-tile--speaking' : ''}${onClick ? ' participant-tile--tappable' : ''}`}
+      className={`participant-tile${small ? ' participant-tile--small' : ''}${isSpeaking ? ' participant-tile--speaking' : ''}${onClick ? ' participant-tile--tappable' : ''}${solo ? ` participant-tile--solo participant-tile--${solo.fill ? 'fill' : 'fit'}` : ''}`}
       style={{ ...(videoAspect ? { '--tile-aspect': videoAspect } : null), ...gridSpan }}
       onClick={onClick}
     >
@@ -1007,12 +1026,31 @@ export default function App() {
   };
   const revealControls = () => { setControlsVisible(true); scheduleHideControls(); };
   // телефон/планшет: тап переключает
-  const onStageTap = () => {
+  const toggleControls = () => {
     clearTimeout(controlsTimerRef.current);
     setControlsVisible(v => {
       if (!v) scheduleHideControls();
       return !v;
     });
+  };
+  // Двойной тап по собеседнику во весь экран переключает «во весь экран» ↔
+  // «кадр целиком». Ожидание второго тапа задерживает одиночный, поэтому
+  // платим эту задержку только там, где двойной тап что-то делает.
+  const soloToggleRef = useRef(null);       // задаётся раскладкой, когда собеседник один
+  const tapTimerRef = useRef(null);
+  const lastTapRef = useRef(0);
+  const onStageTap = () => {
+    if (!soloToggleRef.current) { toggleControls(); return; }
+    const now = Date.now();
+    if (now - lastTapRef.current < 280) {
+      lastTapRef.current = 0;
+      clearTimeout(tapTimerRef.current);
+      soloToggleRef.current();
+      return;
+    }
+    lastTapRef.current = now;
+    clearTimeout(tapTimerRef.current);
+    tapTimerRef.current = setTimeout(toggleControls, 280);
   };
   // ПК: движение мыши показывает управление, через 4с бездействия — прячет
   const onDesktopMouseMove = () => {
@@ -3931,6 +3969,32 @@ export default function App() {
     [packKey, stageSize.w, stageSize.h, offRowH],
   );
 
+  // ── Собеседник один: видео во весь экран ──
+  // Раньше плитка принимала форму потока и прижималась к низу. Сверху
+  // оставалась полоса в пятую часть экрана, а когда собеседник поворачивал
+  // телефон или менял камеру, плитка плавно становилась ниже — её верх
+  // съезжал вниз, и казалось, что картинка уезжает. Теперь плитка всегда
+  // размером со сцену и от потока не зависит; меняется только масштаб
+  // кадра внутри неё.
+  const soloP = visible.length === 1 && !speakerMode ? visible[0] : null;
+  const soloAspect = soloP ? (tileAspect[soloP.identity] || DEFAULT_ASPECT) : null;
+  const stageAspect = stageSize.w && stageSize.h ? stageSize.w / stageSize.h : null;
+  // Форма кадра грубо: вертикаль, квадрат, горизонталь. Выбор человека
+  // помним для этой формы, а повернул собеседник телефон — снова решает
+  // правило: его выбор был про другой кадр.
+  const soloShape = soloAspect == null ? null : soloAspect < 0.8 ? 'portrait' : soloAspect > 1.25 ? 'landscape' : 'square';
+  const soloAutoFill = soloAspect && stageAspect
+    ? 1 - Math.min(soloAspect, stageAspect) / Math.max(soloAspect, stageAspect) <= SOLO_FILL_MAX_LOSS
+    : true;
+  const [soloChoice, setSoloChoice] = useState(null);   // { id, shape, fill } — только на этот звонок
+  useEffect(() => { if (!joined) setSoloChoice(null); }, [joined]);
+  const soloFill = soloP && soloChoice && soloChoice.id === soloP.identity && soloChoice.shape === soloShape
+    ? soloChoice.fill
+    : soloAutoFill;
+  soloToggleRef.current = soloP
+    ? () => setSoloChoice({ id: soloP.identity, shape: soloShape, fill: !soloFill })
+    : null;
+
   // Find participant with active screen share
   // Все, кто прямо сейчас показывает экран. Их может быть больше одного:
   // раньше брался только первый, и второй показ было не посмотреть вовсе.
@@ -6114,7 +6178,8 @@ export default function App() {
           </div>
 
           {/* Video area — full window; тап (телефон) показывает/прячет управление */}
-          <div ref={stageRef} className={`video-stage${isScreenFullscreen ? ' video-stage--fs' : ''}${selfBig ? ' video-stage--selfbig' : ''}`} onClick={isTouchDevice ? onStageTap : undefined}>
+          <div ref={stageRef} className={`video-stage${isScreenFullscreen ? ' video-stage--fs' : ''}${selfBig ? ' video-stage--selfbig' : ''}`} onClick={isTouchDevice ? onStageTap : undefined}
+            onDoubleClick={!isTouchDevice ? () => soloToggleRef.current?.() : undefined}>
             {/* Аудиозвонок: смотреть не на что, поэтому вместо сцены — крупно
                 тот, с кем говоришь, и видно, кто сейчас говорит. Тап по экрану
                 работает как и в видео: показывает и прячет кнопки. */}
@@ -6296,10 +6361,9 @@ export default function App() {
             ) : (
               /* Рядная раскладка без обрезки: плитка принимает пропорцию
                  потока, ряд заполняет ширину, неполный ряд центрируется.
-                 --solo: собеседник один. Тогда остаток по высоте не делим
-                 пополам, а собираем в одну полосу сверху — видео доходит до
-                 самого низа экрана, а полоса достаётся верхней панели. */
-              <div className={`tile-rows${visible.length === 1 ? ' tile-rows--solo' : ''}`}>
+                 --solo: собеседник один — его плитка во весь экран, от края
+                 до края, под вырезом и полосой жестов (soloP выше). */
+              <div className={`tile-rows${soloP ? ' tile-rows--solo' : ''}`}>
                 {/* Один в звонке. Раньше это был просто чёрный экран, и
                     человек не понимал, ждать ему или всё сломалось. */}
                 {visible.length === 0 && (
@@ -6333,7 +6397,20 @@ export default function App() {
                     )}
                   </div>
                 )}
-                {pack && pack.rows.map((row, ri) => (
+                {soloP && (
+                  <ParticipantTile
+                    key={soloP.identity}
+                    participant={soloP}
+                    isLocal={soloP === localP}
+                    isFrontCamera={isFrontCamera}
+                    localMuted={soloP !== localP && mutedUsers.has(soloP.identity)}
+                    onToggleMute={() => toggleUserMute(soloP.identity)}
+                    onMeta={onTileMeta}
+                    backdrop
+                    solo={{ fill: soloFill, stageAspect }}
+                  />
+                )}
+                {pack && !soloP && pack.rows.map((row, ri) => (
                   <div className="tile-row" key={ri} style={{ height: Math.floor(pack.heights[ri]) }}>
                     {row.map(idx => {
                       const p = visible[idx];
