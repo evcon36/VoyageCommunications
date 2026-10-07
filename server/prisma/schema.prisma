@@ -73,7 +73,7 @@ model Recording {
   status           String    @default("active") // active | done | failed
   startedAt        DateTime  @default(now())
   endedAt          DateTime?
-  transcriptStatus String    @default("none") // none | processing | done | failed
+  transcriptStatus String    @default("none") // none | queued | processing | done | failed
   transcript       Json?     // оригинал [{start,end,speaker,text}]
   transcriptAi     Json?     // версия, улучшенная ИИ
   aiStatus         String    @default("none") // none | processing | done | failed

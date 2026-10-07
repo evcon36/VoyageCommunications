@@ -10,8 +10,11 @@ def main():
     model_size = os.environ.get("WHISPER_MODEL", "small")
 
     from faster_whisper import WhisperModel
-    # int8 на CPU, оба ядра — компромисс скорости и памяти
-    model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=2)
+    # int8 на CPU. Поток один: на двух ядрах параллельно может идти запись
+    # звонка (egress), и whisper в два потока её душил. Сервер запускает
+    # нас ещё и с nice 19 / ionice idle. Число потоков — WHISPER_THREADS.
+    threads = int(os.environ.get("WHISPER_THREADS", "1"))
+    model = WhisperModel(model_size, device="cpu", compute_type="int8", cpu_threads=threads)
 
     segments, info = model.transcribe(
         path,

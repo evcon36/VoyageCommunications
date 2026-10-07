@@ -1,6 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
+const fs = require('fs');
 const { EgressClient, EncodedFileType, RoomServiceClient } = require('livekit-server-sdk');
 const authMiddleware = require('../middleware/auth.middleware');
 const prisma = require('../lib/prisma');
@@ -28,15 +29,52 @@ const WHISPER_PY = '/opt/whisper-venv/bin/python';
 // только одна транскрибация одновременно (слабый сервер)
 let transcribeBusy = false;
 
+// LiveKit забыл egress: после перезапуска он не помнит даже завершённые.
+const isEgressGone = (e) => /does not exist|not found/i.test(String(e?.message || e));
+
+// Egress больше нет, а запись у нас всё ещё «идёт». Раньше её опрашивали
+// вечно: сотни строк «egress does not exist» в журнале, и, хуже того, в этой
+// комнате нельзя было начать новую запись — /start отвечал «Запись уже идёт».
+// Сам egress о судьбе файла уже не расскажет, поэтому смотрим на файл: целый
+// mp4 (ffprobe читает длительность) — запись состоялась, просто мы не застали
+// её конец; битый или пустой — не состоялась. Помечать «неудачной» вслепую
+// нельзя: так пропала бы настоящая запись, конец которой мы проспали.
+function probeDuration(file) {
+  return new Promise((resolve) => {
+    execFile('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file],
+      { timeout: 20000 }, (err, out) => {
+        const d = parseFloat(String(out || '').trim());
+        resolve(!err && Number.isFinite(d) && d > 0 ? d : 0);
+      });
+  });
+}
+async function settleLostRecording(rec) {
+  const file = rec.fileName ? `${RECORDINGS_DIR}/${rec.fileName}` : null;
+  let ok = false, endedAt = new Date();
+  if (file && fs.existsSync(file)) {
+    ok = (await probeDuration(file)) > 0;
+    try { endedAt = fs.statSync(file).mtime; } catch {}
+  }
+  const speakerLog = recTimeline.endRec(rec.id);
+  await prisma.recording.update({
+    where: { id: rec.id },
+    data: { status: ok ? 'done' : 'failed', endedAt, ...(speakerLog ? { speakerLog } : {}) },
+  });
+  console.log(`REC SYNC: egress ${rec.egressId} пропал, запись ${rec.id} → ${ok ? 'done' : 'failed'}`);
+  if (ok) pumpTranscribeQueue();
+}
+
 // Сверить «активные» записи с реальным egress; на завершении сохранить таймлайн
 async function syncActiveRecordings() {
   const active = await prisma.recording.findMany({ where: { status: 'active' } });
   if (!active.length) return;
   for (const rec of active) {
+    // Свежую запись не трогаем: egress мог ещё не появиться в списке
+    const young = Date.now() - new Date(rec.startedAt).getTime() < 60000;
     try {
       const infos = await egress.listEgress({ egressId: rec.egressId });
       const info = infos && infos[0];
-      if (!info) continue;
+      if (!info) { if (!young) await settleLostRecording(rec); continue; }
       const s = Number(info.status); // 3=COMPLETE 4=FAILED 5=ABORTED
       if (s >= 3) {
         const speakerLog = recTimeline.endRec(rec.id);
@@ -44,10 +82,114 @@ async function syncActiveRecordings() {
           where: { id: rec.id },
           data: { status: s === 3 ? 'done' : 'failed', endedAt: new Date(), speakerLog },
         });
+        pumpTranscribeQueue();
       }
-    } catch (e) { console.error('REC SYNC:', e.message); }
+    } catch (e) {
+      if (isEgressGone(e) && !young) {
+        await settleLostRecording(rec).catch(err => console.error('REC SYNC SETTLE:', err.message));
+      } else {
+        console.error('REC SYNC:', e.message);
+      }
+    }
   }
 }
+
+// ── Очередь расшифровки ──
+// Сервер — два ядра. Запись звонка (egress, программное кодирование 720p)
+// держит 55–65% всё время звонка, а whisper брал оба ядра почти целиком.
+// Расшифровку, запущенную во время записываемого звонка, egress не
+// переживал: «REC START ERROR: no response from servers», рывки в записи.
+// Поэтому:
+//   1) пока идёт хоть одна запись, расшифровка не начинается, а ждёт в
+//      очереди (transcriptStatus = 'queued') и стартует сама после звонка;
+//   2) whisper идёт с низшим приоритетом (nice 19, ionice idle) и в один
+//      поток — если запись начнётся посреди расшифровки, уступит он.
+async function recordingInProgress() {
+  try {
+    const list = await egress.listEgress({ active: true });
+    return (list || []).length > 0;
+  } catch (e) {
+    // LiveKit недоступен — значит, и записывать сейчас нечего
+    console.error('TRANSCRIBE EGRESS CHECK:', e.message);
+    return false;
+  }
+}
+
+let pumping = false;
+async function pumpTranscribeQueue() {
+  if (pumping || transcribeBusy) return;
+  pumping = true;
+  try {
+    const next = await prisma.recording.findFirst({
+      where: { transcriptStatus: 'queued' },
+      orderBy: { startedAt: 'asc' },
+    });
+    if (!next) return;
+    if (await recordingInProgress()) return;   // подождём следующего круга
+    await runTranscribe(next);
+  } catch (e) {
+    console.error('TRANSCRIBE QUEUE:', e.message);
+  } finally {
+    pumping = false;
+  }
+}
+
+// Ждём только смены статуса; сам whisper работает в фоне
+async function runTranscribe(rec) {
+  transcribeBusy = true;
+  const filePath = `${RECORDINGS_DIR}/${rec.fileName}`;
+  await prisma.recording.update({ where: { id: rec.id }, data: { transcriptStatus: 'processing' } }).catch(() => {});
+  const child = spawn('nice', ['-n', '19', 'ionice', '-c3', WHISPER_PY, TRANSCRIBE_PY, filePath], {
+    env: { ...process.env, WHISPER_MODEL: 'small', WHISPER_THREADS: '1' },
+  });
+  let out = '', err = '';
+  child.stdout.on('data', d => { out += d; });
+  child.stderr.on('data', d => { err += d; });
+  child.on('error', async (e) => {
+    transcribeBusy = false;
+    console.error('TRANSCRIBE SPAWN:', e.message);
+    await prisma.recording.update({ where: { id: rec.id }, data: { transcriptStatus: 'failed' } }).catch(() => {});
+    pumpTranscribeQueue();
+  });
+  child.on('close', async (code) => {
+    transcribeBusy = false;
+    try {
+      if (code !== 0) {
+        console.error('TRANSCRIBE FAIL:', err.slice(-500));
+        await prisma.recording.update({ where: { id: rec.id }, data: { transcriptStatus: 'failed' } });
+        return;
+      }
+      const parsed = JSON.parse(out);
+      const recStartMs = new Date(rec.startedAt).getTime();
+      const withSpeakers = assignSpeakers(parsed.segments || [], rec.speakerLog, recStartMs);
+      await prisma.recording.update({
+        where: { id: rec.id },
+        data: { transcript: withSpeakers, transcriptStatus: 'done' },
+      });
+    } catch (e) {
+      console.error('TRANSCRIBE PARSE ERROR:', e.message);
+      await prisma.recording.update({ where: { id: rec.id }, data: { transcriptStatus: 'failed' } }).catch(() => {});
+    } finally {
+      pumpTranscribeQueue();
+    }
+  });
+}
+
+// Перезапуск сервера убивает whisper на полдороге, и запись навсегда
+// оставалась «в обработке» без кнопки повтора. Возвращаем такие в очередь.
+setTimeout(async () => {
+  try {
+    const n = await prisma.recording.updateMany({
+      where: { transcriptStatus: 'processing' },
+      data: { transcriptStatus: 'queued' },
+    });
+    if (n.count) console.log(`TRANSCRIBE: ${n.count} прерванных расшифровок вернули в очередь`);
+  } catch (e) { console.error('TRANSCRIBE RESUME:', e.message); }
+  pumpTranscribeQueue();
+}, 5000);
+// Очередь ждёт конца записи. Конец ловим и сами (остановка, опустевшая
+// комната, сверка), но страхуемся кругом раз в полминуты.
+setInterval(() => { syncActiveRecordings().catch(() => {}).finally(pumpTranscribeQueue); }, 30000).unref?.();
 
 // ── Начать запись ──
 router.post('/start', authMiddleware, async (req, res) => {
@@ -157,12 +299,22 @@ router.post('/start', authMiddleware, async (req, res) => {
 async function stopActiveRecording(roomId) {
   const rec = await prisma.recording.findFirst({ where: { roomId, status: 'active' } });
   if (!rec) return null;
-  await egress.stopEgress(rec.egressId);
+  try {
+    await egress.stopEgress(rec.egressId);
+  } catch (e) {
+    // egress уже нет — останавливать нечего, решаем судьбу записи по файлу
+    if (!isEgressGone(e)) throw e;
+    await settleLostRecording(rec);
+    return prisma.recording.findUnique({ where: { id: rec.id } });
+  }
   const speakerLog = recTimeline.endRec(rec.id);
-  return prisma.recording.update({
+  const done = await prisma.recording.update({
     where: { id: rec.id },
     data: { status: 'done', endedAt: new Date(), speakerLog },
   });
+  // файл дописывается ещё несколько секунд после остановки
+  setTimeout(pumpTranscribeQueue, 15000);
+  return done;
 }
 
 // Комната опустела — снимаем запись, если её забыли выключить. Ошибку сюда
@@ -304,42 +456,27 @@ router.post('/:id/transcribe', authMiddleware, async (req, res) => {
     if (!rec) return res.status(404).json({ message: 'Запись не найдена' });
     if (rec.startedBy !== req.user.username) return res.status(403).json({ message: 'Нет доступа' });
     if (rec.status !== 'done' || !rec.fileName) return res.status(400).json({ message: 'Запись ещё не готова' });
-    if (rec.transcriptStatus === 'processing') return res.status(409).json({ message: 'Уже обрабатывается' });
-    if (transcribeBusy) return res.status(429).json({ message: 'Сервер занят другой расшифровкой, попробуйте позже' });
+    if (rec.transcriptStatus === 'processing' || rec.transcriptStatus === 'queued') {
+      return res.status(409).json({ message: 'Уже обрабатывается' });
+    }
 
-    await prisma.recording.update({ where: { id: rec.id }, data: { transcriptStatus: 'processing' } });
-    res.status(202).json({ message: 'Транскрибация запущена' });
-
-    // фоновая обработка
-    transcribeBusy = true;
-    const filePath = `${RECORDINGS_DIR}/${rec.fileName}`;
-    const child = spawn(WHISPER_PY, [TRANSCRIBE_PY, filePath], { env: { ...process.env, WHISPER_MODEL: 'small' } });
-    let out = '', err = '';
-    child.stdout.on('data', d => { out += d; });
-    child.stderr.on('data', d => { err += d; });
-    child.on('close', async (code) => {
-      transcribeBusy = false;
-      try {
-        if (code !== 0) {
-          console.error('TRANSCRIBE FAIL:', err.slice(-500));
-          await prisma.recording.update({ where: { id: rec.id }, data: { transcriptStatus: 'failed' } });
-          return;
-        }
-        const parsed = JSON.parse(out);
-        const recStartMs = new Date(rec.startedAt).getTime();
-        const withSpeakers = assignSpeakers(parsed.segments || [], rec.speakerLog, recStartMs);
-        await prisma.recording.update({
-          where: { id: rec.id },
-          data: { transcript: withSpeakers, transcriptStatus: 'done' },
-        });
-      } catch (e) {
-        console.error('TRANSCRIBE PARSE ERROR:', e.message);
-        await prisma.recording.update({ where: { id: rec.id }, data: { transcriptStatus: 'failed' } }).catch(() => {});
-      }
+    // Всё уходит через очередь: она сама ждёт конца идущих записей и
+    // свободного whisper. Отвечаем, началась ли расшифровка сразу или ждёт.
+    await prisma.recording.update({ where: { id: rec.id }, data: { transcriptStatus: 'queued' } });
+    const waitsForCall = await recordingInProgress();
+    const waitsForOther = transcribeBusy;
+    await pumpTranscribeQueue();
+    const fresh = await prisma.recording.findUnique({ where: { id: rec.id }, select: { transcriptStatus: true } });
+    const status = fresh?.transcriptStatus === 'processing' ? 'processing' : 'queued';
+    return res.status(202).json({
+      status,
+      message: status === 'processing' ? 'Транскрибация запущена'
+        : waitsForCall ? 'Идёт запись звонка, расшифровка начнётся после неё'
+        : waitsForOther ? 'Сначала закончится другая расшифровка'
+        : 'Расшифровка в очереди',
     });
   } catch (e) {
     console.error('TRANSCRIBE ERROR:', e.message);
-    transcribeBusy = false;
     return res.status(500).json({ message: 'Ошибка транскрибации' });
   }
 });

@@ -1230,6 +1230,12 @@ export default function App() {
       if (resp.ok) {
         const data = await resp.json();
         setMyRecordings(data.recordings || []);
+        // Расшифровка из очереди может стартовать через час, после звонка.
+        // Открыли список заново — продолжаем следить, иначе подпись «в
+        // очереди» висела бы до следующего открытия раздела.
+        for (const r of data.recordings || []) {
+          if (r.transcriptStatus === 'queued' || r.transcriptStatus === 'processing') pollTranscriptRef.current?.(r.id);
+        }
       }
     } catch {}
     finally { setRecordingsLoading(false); }
@@ -1244,15 +1250,24 @@ export default function App() {
   }, [isAccountPanelOpen, accountTab, fetchMyRecordings]);
 
   // опрос статуса обработки (расшифровка или ИИ), пока идёт
+  const pollingRef = useRef(new Set());   // один опрос на запись и поле
   const pollTranscript = useCallback((recId, field = 'transcriptStatus') => {
+    const key = `${recId}:${field}`;
+    if (pollingRef.current.has(key)) return;
+    pollingRef.current.add(key);
     const token = localStorage.getItem('token');
     const iv = setInterval(async () => {
       try {
         const r = await apiFetch(`/recordings/${recId}/transcript`, { headers: { Authorization: `Bearer ${token}` } });
         const d = await r.json();
         const value = field === 'aiStatus' ? d.aiStatus : field === 'summaryStatus' ? d.summaryStatus : d.status;
+        // из очереди в работу — меняем подпись, не дожидаясь конца
+        if (field === 'transcriptStatus' && (value === 'queued' || value === 'processing')) {
+          setMyRecordings(prev => prev.map(x => x.id === recId && x.transcriptStatus !== value ? { ...x, transcriptStatus: value } : x));
+        }
         if (value === 'done' || value === 'failed') {
           clearInterval(iv);
+          pollingRef.current.delete(key);
           setMyRecordings(prev => prev.map(x => x.id === recId
             ? { ...x, transcriptStatus: d.status, aiStatus: d.aiStatus, transcript: d.transcript, transcriptAi: d.transcriptAi, summary: d.summary, summaryStatus: d.summaryStatus }
             : x));
@@ -1260,6 +1275,8 @@ export default function App() {
       } catch {}
     }, 6000);
   }, []);
+  const pollTranscriptRef = useRef(null);
+  pollTranscriptRef.current = pollTranscript;
 
   // скачать расшифровку текстовым файлом (с таймкодами). ai=true — версия ИИ
   // Расшифровку и итоги можно было только скачать файлом: то, ради чего
@@ -1435,7 +1452,11 @@ export default function App() {
         method: 'POST', headers: { Authorization: `Bearer ${token}` },
       });
       if (resp.status === 202) {
-        setMyRecordings(prev => prev.map(r => r.id === recId ? { ...r, transcriptStatus: 'processing' } : r));
+        // Расшифровка может не начаться сразу: пока идёт запись звонка, сервер
+        // держит её в очереди, чтобы не задушить запись (два ядра на всё)
+        const d = await resp.json().catch(() => ({}));
+        const st = d.status === 'queued' ? 'queued' : 'processing';
+        setMyRecordings(prev => prev.map(r => r.id === recId ? { ...r, transcriptStatus: st } : r));
         pollTranscript(recId);
       } else {
         const d = await resp.json().catch(() => ({}));
@@ -5535,7 +5556,7 @@ export default function App() {
                                   <button className="ghost-btn room-card-btn" onClick={() => downloadRecording(rec.id)}>
                                     <Icon name="download" size={14} /> Видео
                                   </button>
-                                  {rec.transcriptStatus !== 'done' && rec.transcriptStatus !== 'processing' && (
+                                  {rec.transcriptStatus !== 'done' && rec.transcriptStatus !== 'processing' && rec.transcriptStatus !== 'queued' && (
                                     <button className="ghost-btn room-card-btn" onClick={() => startTranscribe(rec.id)}>
                                       <Icon name="chat" size={14} /> {rec.transcriptStatus === 'failed' ? 'Повторить расшифровку' : 'Расшифровать'}
                                     </button>
@@ -5643,9 +5664,14 @@ export default function App() {
                                 </div>
                               )}
 
+                              {rec.transcriptStatus === 'queued' && (
+                                <div className="transcript-status">
+                                  <span className="spinner" /> В очереди: расшифровка начнётся, когда закончится запись звонка или другая расшифровка
+                                </div>
+                              )}
                               {rec.transcriptStatus === 'processing' && (
                                 <div className="transcript-status">
-                                  <span className="spinner" /> Расшифровка речи… обычно 1–2 минуты на минуту записи
+                                  <span className="spinner" /> Расшифровка речи… обычно около двух минут на минуту записи
                                 </div>
                               )}
                               {rec.aiStatus === 'processing' && (
